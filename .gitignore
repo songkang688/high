@@ -13,6 +13,13 @@ runtime_outputs/
 models/lbfmodel.yaml
 models/*.onnx
 
+# C++ 构建产物与本地黄金数据（仓库内只保留 1、13 两组样本 + 版本记录）
+cpp/build/
+cpp/golden/*
+!cpp/golden/1_*
+!cpp/golden/13_*
+!cpp/golden/versions.json
+
 # OS / IDE
 .DS_Store
 Thumbs.db
