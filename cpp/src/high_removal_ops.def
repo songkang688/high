@@ -1,0 +1,4 @@
+; Windows 模块定义文件：与 Linux 的 high_removal_ops.version 等价，
+; 只导出 ORT 自定义算子入口（high_removal_ops.dll 与 high_removal_pyops.dll 共用）。
+EXPORTS
+    RegisterCustomOps

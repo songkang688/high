@@ -1,0 +1,142 @@
+# 在 windows-latest 上构建两个 ORT 自定义算子 DLL 并做真机冒烟测试：
+#   high_removal_ops.dll    —— C++ 快速内核（OpenCV/yaml-cpp 经 vcpkg 静态链接，自包含）
+#   high_removal_pyops.dll  —— 精确内核蹦床（CPython 稳定 ABI，链接 python3.lib，宿主须为 Python ≥ 3.10）
+# 产物以 artifact「windows-dll」上传（含 SHA256SUMS.txt）。
+name: windows-dll
+
+on:
+  push:
+    paths:
+      - 'cpp/**'
+      - '.github/workflows/windows-dll.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ORT_VERSION: "1.22.0"
+  VCPKG_TRIPLET: x64-windows-static-md
+
+jobs:
+  build-windows-dll:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # vcpkg 二进制缓存：OpenCV 静态库冷构建约 30 分钟，命中缓存后只需几分钟。
+      # 用 restore/save 拆开，保证即使后续步骤失败也保存已编译的二进制缓存。
+      - name: Restore vcpkg binary archives
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-opencv-yaml-v1
+          restore-keys: |
+            vcpkg-${{ env.VCPKG_TRIPLET }}-
+
+      # 静态库 + 动态 CRT(/MD)：high_removal_ops.dll 不携带 OpenCV/yaml-cpp 运行期 DLL 依赖。
+      # opencv4[core] 关闭默认特性（dnn/highgui 等用不到），只留内核需要的模块与编解码器。
+      - name: Install OpenCV + yaml-cpp (vcpkg, static)
+        shell: pwsh
+        run: |
+          vcpkg install "opencv4[core,fs,thread,intrinsics,jpeg,png]" yaml-cpp --triplet $env:VCPKG_TRIPLET
+
+      - name: Save vcpkg binary archives
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-opencv-yaml-v1
+
+      - name: Download ONNX Runtime win-x64
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$($env:ORT_VERSION)/onnxruntime-win-x64-$($env:ORT_VERSION).zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\ort.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ort.zip" -DestinationPath "$env:RUNNER_TEMP\ort"
+
+      # 不写死 -G：runner 镜像的 VS 版本会更新（windows-latest 现为 VS 2026），
+      # 让 CMake 自选已装的 Visual Studio 生成器，-A x64 对任意 VS 生成器有效。
+      - name: Configure (Visual Studio, x64)
+        shell: pwsh
+        run: |
+          cmake -S cpp -B cpp/build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
+            -DONNXRUNTIME_ROOT="$env:RUNNER_TEMP\ort\onnxruntime-win-x64-$($env:ORT_VERSION)" `
+            -DPython3_ROOT_DIR="$env:pythonLocation"
+
+      - name: Build the two DLLs
+        shell: pwsh
+        run: cmake --build cpp/build --config Release --target high_removal_ops high_removal_pyops --parallel 4
+
+      # 真机验证：Python onnxruntime 加载两个 DLL 各跑一张图；
+      # 精确内核额外断言与直接调用 process_image 逐位相同，C++ 内核断言 MAE < 1/255。
+      - name: Smoke test with Python onnxruntime
+        shell: pwsh
+        run: |
+          pip install "onnxruntime>=1.22" numpy opencv-contrib-python==4.13.0.92 mediapipe==0.10.35 PyYAML Pillow
+          python tools/run_high_onnx.py --ops cpp/build/Release/high_removal_ops.dll   -i data/1.png -o "$env:RUNNER_TEMP\out_cpp.png"
+          python tools/run_high_onnx.py --ops cpp/build/Release/high_removal_pyops.dll -i data/1.png -o "$env:RUNNER_TEMP\out_exact.png"
+          @'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path(".").resolve()))
+          from highlight_removal.runtime_bootstrap import DEFAULT_RUNTIME_MODE, bootstrap_before_numpy
+          bootstrap_before_numpy()
+          import cv2
+          import numpy as np
+          import onnxruntime as ort
+          from highlight_removal.pipeline import process_image
+          from highlight_removal.utils import apply_runtime_mode, load_yaml
+
+          cfg = load_yaml("configs/default.yaml")
+          cfg["runtime"] = apply_runtime_mode(DEFAULT_RUNTIME_MODE)
+          cfg.setdefault("pipeline", {})["enable_visualization"] = False
+          img = cv2.imread("data/1.png", cv2.IMREAD_COLOR)
+          py = process_image(img, cfg)
+          assert py.success, py.status
+
+          def run(dll):
+              so = ort.SessionOptions()
+              so.register_custom_ops_library(dll)
+              sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
+              return sess.run(["result", "hard_mask"], {"image": np.ascontiguousarray(img)})
+
+          res, mask = run(r"cpp/build/Release/high_removal_pyops.dll")
+          assert np.array_equal(res, py.result_bgr) and np.array_equal(mask, py.highlight_mask), \
+              "exact kernel (high_removal_pyops.dll) is not bit-identical to process_image"
+          print("exact kernel: bit-identical OK")
+
+          res2, _ = run(r"cpp/build/Release/high_removal_ops.dll")
+          mae = float(np.abs(res2.astype(np.int16) - py.result_bgr.astype(np.int16)).mean())
+          print(f"cpp kernel MAE vs python: {mae:.5f}/255")
+          assert mae < 1.0, f"cpp kernel MAE too high: {mae}"
+          print("WINDOWS SMOKE TEST OK")
+          '@ | python -
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item cpp/build/Release/high_removal_ops.dll,cpp/build/Release/high_removal_pyops.dll artifact/
+          Get-FileHash artifact/*.dll -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path -Leaf $_.Path)" } |
+            Set-Content artifact/SHA256SUMS.txt
+          Get-Content artifact/SHA256SUMS.txt
+          Get-ChildItem artifact
+
+      - name: Upload DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dll
+          path: artifact/
+          if-no-files-found: error

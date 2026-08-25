@@ -957,7 +957,7 @@ def build_app():
     """
     with gr.Blocks(title="公安证件照人脸面部高光去除系统", css=app_css) as demo:
         batch_state = gr.State(startup_batch)
-        gr.Markdown("# 公安证件照人脸面部高光去除系统\n基于人脸检测、关键点区域追踪、皮肤区域约束和真实性审计。CPU-only：默认 CPU 狂暴（全核 + 高优先级），GPU 已禁用。")
+        gr.Markdown("# 公安证件照人脸面部高光去除系统\n基于人脸检测、关键点区域追踪、皮肤区域约束和真实性审计。CPU-only：默认 CPU 狂暴（全核 + 高优先级），GPU 已禁用。引擎切换 / Python vs ONNX 对比请用精简工作室页：`python app_studio.py`（端口 7861）。")
         with gr.Row():
             with gr.Column():
                 input_image = gr.Image(

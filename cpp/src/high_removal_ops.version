@@ -1,0 +1,7 @@
+/* 只导出 ORT 自定义算子入口，隐藏 OpenCV/yaml-cpp 等内部符号，避免与宿主进程冲突。 */
+{
+  global:
+    RegisterCustomOps;
+  local:
+    *;
+};
