@@ -28,7 +28,8 @@ import numpy as np
 
 __all__ = ["FacehiOnnx", "remove_highlight"]
 
-_LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib", "facehi_custom_ops.dll")
+_LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib",
+              "facehi_custom_ops.dll", "libfacehi_custom_ops.dll")
 
 
 def _repo_root() -> Path:

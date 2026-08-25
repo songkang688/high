@@ -30,7 +30,8 @@ import numpy as np
 __all__ = ["FacehiOnnx", "remove_highlight", "find_model", "find_ops_lib"]
 
 _HERE = Path(__file__).resolve().parent
-_LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib", "facehi_custom_ops.dll")
+_LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib",
+              "facehi_custom_ops.dll", "libfacehi_custom_ops.dll")
 
 
 def find_model() -> Path | None:
