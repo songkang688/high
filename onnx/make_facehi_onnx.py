@@ -22,7 +22,7 @@
   python onnx/make_facehi_onnx.py --mode 常用模式 --out git-high2/models/facehi.onnx
 
   # 强力版（三独立档位之一）：检测=灵敏 + 修复=强力 + method=混合 +
-  # process_scale=compromise（即现有常用模式），并在此之上略加强修复/混合参数
+  # process_scale=compromise（即现有常用模式），并在此之上加强修复/混合参数
   python onnx/make_facehi_onnx.py --preset strong --out git-high2/models/facehi_strong.onnx
 """
 from __future__ import annotations

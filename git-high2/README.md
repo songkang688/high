@@ -49,7 +49,8 @@ git-high2/
 
 - **`models/facehi_strong.onnx`（强力版）**：去高光最狠、细节保护最少。
   烘焙档位 `mode="强力模式"` = 现有常用模式（检测=灵敏 + 修复=强力 +
-  method=混合 + process_scale=compromise）基础上把修复/混合参数再略加强。
+  method=混合 + process_scale=compromise）基础上加强修复/混合参数
+  （强修复分支覆盖整个高光核心、混合 alpha 拉满）。
   详见 `models/STRONG.md`。
 - **`models/facehi.onnx`（保留原文件，未改动）**：仍是原来的默认模型，
   烘焙 `mode="常用模式"`。强力版单独存在于 `facehi_strong.onnx`，
