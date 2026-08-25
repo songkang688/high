@@ -73,12 +73,23 @@ def _faithful_suppress(image_bgr: np.ndarray, hard_mask: np.ndarray, soft_mask: 
     L = lab[:, :, 0]
     ref_L = ref_lab[:, :, 0]
     # 保留高频纹理：目标亮度来自 inpaint 参考，但局部纹理部分从原图回加少量。
+    # texture_keep_factor 默认 0.16（与历史行为逐位一致）；实验配置可调高以抗磨皮。
     low = cv2.GaussianBlur(L, (0, 0), 2.2)
     texture = L - low
-    texture_keep = texture * (0.16 * np.clip(texture_strength, 0, 1))
+    texture_keep = texture * (float(_p(params, "texture_keep_factor", 0.16)) * np.clip(texture_strength, 0, 1))
 
     # 只降低亮度，不把正常皮肤拉得过暗；同时允许明显白斑向周围肤色回归。
-    local_skin = cv2.GaussianBlur(L, (0, 0), max(8.0, float(_p(params, "local_sigma", 6.0)) * 1.6))
+    baseline_sigma = max(8.0, float(_p(params, "local_sigma", 6.0)) * 1.6)
+    valid_mask = params.get("_faithful_valid_mask")
+    if valid_mask is not None and bool(_p(params, "faithful_baseline_exclude_shine", False)):
+        # 实验开关（默认关闭）：皮肤亮度基线排除油光核心，防止大片油光把
+        # 自身基线抬高、target_L 的下限 floor 绑死导致压不下去。
+        nf = (valid_mask & (mask_to_uint8(hard_mask) == 0)).astype(np.float32)
+        num = cv2.GaussianBlur(L * nf, (0, 0), baseline_sigma)
+        den = cv2.GaussianBlur(nf, (0, 0), baseline_sigma)
+        local_skin = num / np.maximum(den, 1e-3)
+    else:
+        local_skin = cv2.GaussianBlur(L, (0, 0), baseline_sigma)
     min_allowed = np.maximum(L * luminance_floor, local_skin * 0.93)
     target_L = np.maximum(ref_L + texture_keep, min_allowed)
     target_L = np.maximum(target_L, local_skin - 5.0)
@@ -149,6 +160,10 @@ def _remove_highlight_core(image_bgr: np.ndarray, hard_mask: np.ndarray, soft_ma
     soft = mask_to_uint8(soft_mask).copy()
     hard[(~skin) | protect] = 0
     soft[(~skin) | protect] = 0
+
+    if bool(_p(params, "faithful_baseline_exclude_shine", False)):
+        params = dict(params)
+        params["_faithful_valid_mask"] = skin & (~protect)
 
     face_area = max(1, int((mask_to_uint8(regions.masks["face_mask"]) > 0).sum()))
     mod_area_ratio = float((hard > 0).sum() / face_area)
