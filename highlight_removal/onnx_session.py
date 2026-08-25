@@ -55,14 +55,18 @@ def resolve_ops_library() -> Optional[Path]:
     return DEFAULT_OPS_PATH if DEFAULT_OPS_PATH.is_file() else None
 
 
+def _missing_ops_message() -> str:
+    env = os.environ.get(OPS_ENV_VAR, "").strip()
+    if env:
+        return f"环境变量 {OPS_ENV_VAR}={env} 指向的算子库不存在。\n{build_hint()}"
+    return build_hint()
+
+
 def availability() -> Tuple[bool, str]:
     """(是否可用, 中文说明)。只检查文件与依赖，不构建会话。"""
-    env = os.environ.get(OPS_ENV_VAR, "").strip()
     ops = resolve_ops_library()
     if ops is None:
-        if env:
-            return False, f"环境变量 {OPS_ENV_VAR}={env} 指向的算子库不存在。\n{build_hint()}"
-        return False, build_hint()
+        return False, _missing_ops_message()
     if not DEFAULT_MODEL_PATH.is_file():
         return False, (
             f"未找到单文件模型 {DEFAULT_MODEL_PATH}，"
@@ -81,7 +85,7 @@ def get_session(model_path: str | Path | None = None, ops_library: str | Path | 
     model = Path(model_path) if model_path else DEFAULT_MODEL_PATH
     ops = Path(ops_library) if ops_library else resolve_ops_library()
     if ops is None or not ops.is_file():
-        raise OnnxEngineUnavailable(build_hint())
+        raise OnnxEngineUnavailable(_missing_ops_message())
     if not model.is_file():
         raise OnnxEngineUnavailable(
             f"未找到单文件模型 {model}，请运行 python tools/export_high_removal_onnx.py 生成。"
