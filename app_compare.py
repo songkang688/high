@@ -175,6 +175,20 @@ def _amplified_diff(a: np.ndarray, b: np.ndarray, gain: float) -> np.ndarray:
     return np.clip(diff * float(gain), 0, 255).astype(np.uint8)
 
 
+def _diff_view(a: np.ndarray, b: np.ndarray, gain: float, auto: bool) -> Tuple[np.ndarray, str]:
+    """生成差分可视化与倍数说明。auto=True 时按最大像素差归一，保证差异位置可见。"""
+    max_d = int(cv2.absdiff(a, b).max())
+    if auto:
+        if max_d == 0:
+            return np.zeros_like(a), "两图逐位一致，无差异像素。"
+        gain_eff = min(255.0 / max_d, 128.0)
+        note = f"差分放大倍数：自动 ×{gain_eff:.0f}（最大像素差 {max_d}/255）"
+    else:
+        gain_eff = float(gain)
+        note = f"差分放大倍数：×{gain_eff:.0f}（最大像素差 {max_d}/255，流水线差分图默认 ×4）"
+    return _amplified_diff(a, b, gain_eff), note
+
+
 def _mask_rgb(mask: np.ndarray) -> np.ndarray:
     if mask.ndim == 2:
         mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
@@ -290,14 +304,15 @@ def _pick_diff_pair(state: Dict[str, Any], diff_base: str):
     return state.get(key_a), state.get(key_b)
 
 
-def ui_update_diff(state, diff_base, diff_gain):
+def ui_update_diff(state, diff_base, diff_gain, diff_auto):
     a, b = _pick_diff_pair(state or {}, diff_base)
     if a is None or b is None:
-        return gr.update()
-    return bgr_to_rgb(_amplified_diff(a, b, diff_gain))
+        return gr.update(), gr.update()
+    diff_img, note = _diff_view(a, b, diff_gain, diff_auto)
+    return bgr_to_rgb(diff_img), note
 
 
-def ui_run_compare(image_path, mode_name, diff_base, diff_gain):
+def ui_run_compare(image_path, mode_name, diff_base, diff_gain, diff_auto):
     bgr = _decode_input(image_path)
     orig_rgb = bgr_to_rgb(bgr)
     state: Dict[str, Any] = {"orig": bgr, "py": None, "onnx": None}
@@ -348,16 +363,16 @@ def ui_run_compare(image_path, mode_name, diff_base, diff_gain):
         )
 
     diff_a, diff_b = _pick_diff_pair(state, diff_base)
-    diff_rgb = (
-        bgr_to_rgb(_amplified_diff(diff_a, diff_b, diff_gain))
-        if diff_a is not None and diff_b is not None
-        else None
-    )
+    diff_rgb = None
+    diff_note = ""
+    if diff_a is not None and diff_b is not None:
+        diff_img, diff_note = _diff_view(diff_a, diff_b, diff_gain, diff_auto)
+        diff_rgb = bgr_to_rgb(diff_img)
 
     report = " ｜ ".join(notes)
     if onnx_error_md:
         report += "\n\n" + onnx_error_md
-    return orig_rgb, py_rgb, onnx_rgb, diff_rgb, metrics_html, report, state
+    return orig_rgb, py_rgb, onnx_rgb, diff_rgb, diff_note, metrics_html, report, state
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +555,7 @@ def build_app() -> gr.Blocks:
                         with gr.Row():
                             cmp_onnx = gr.Image(label="ONNX 结果", interactive=False, height=380)
                             cmp_diff = gr.Image(label="差分可视化（|a − b| × 放大倍数）", interactive=False, height=380)
+                        cmp_diff_note = gr.Markdown("", elem_classes=["hl-note"])
                         cmp_metrics = gr.HTML("")
                         cmp_report = gr.Markdown("", elem_classes=["hl-report"])
                         with gr.Accordion("高级选项：差分显示", open=False):
@@ -547,11 +563,14 @@ def build_app() -> gr.Blocks:
                                 choices=DIFF_BASE_CHOICES,
                                 value=DIFF_BASE_CHOICES[0],
                                 label="差分基准",
-                                info="Python 与 ONNX 差异极小时可增大放大倍数观察差异位置",
+                            )
+                            diff_auto = gr.Checkbox(
+                                value=True,
+                                label="自动放大（按最大像素差归一，保证差异位置可见）",
                             )
                             diff_gain = gr.Slider(
                                 1, 64, value=DEFAULT_DIFF_GAIN, step=1,
-                                label="差分放大倍数（默认 4，与流水线差分图一致）",
+                                label="手动放大倍数（关闭自动放大后生效；×4 与流水线差分图一致）",
                             )
 
         sample_dd.change(select_sample, inputs=[sample_dd], outputs=[input_image])
@@ -569,11 +588,13 @@ def build_app() -> gr.Blocks:
         )
         cmp_btn.click(
             ui_run_compare,
-            inputs=[input_image, mode_radio, diff_base, diff_gain],
-            outputs=[cmp_orig, cmp_py, cmp_onnx, cmp_diff, cmp_metrics, cmp_report, cmp_state],
+            inputs=[input_image, mode_radio, diff_base, diff_gain, diff_auto],
+            outputs=[cmp_orig, cmp_py, cmp_onnx, cmp_diff, cmp_diff_note, cmp_metrics, cmp_report, cmp_state],
         )
-        diff_base.change(ui_update_diff, inputs=[cmp_state, diff_base, diff_gain], outputs=[cmp_diff])
-        diff_gain.release(ui_update_diff, inputs=[cmp_state, diff_base, diff_gain], outputs=[cmp_diff])
+        diff_inputs = [cmp_state, diff_base, diff_gain, diff_auto]
+        diff_base.change(ui_update_diff, inputs=diff_inputs, outputs=[cmp_diff, cmp_diff_note])
+        diff_auto.change(ui_update_diff, inputs=diff_inputs, outputs=[cmp_diff, cmp_diff_note])
+        diff_gain.release(ui_update_diff, inputs=diff_inputs, outputs=[cmp_diff, cmp_diff_note])
 
     return demo
 
