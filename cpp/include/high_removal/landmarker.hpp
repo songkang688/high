@@ -21,6 +21,10 @@ class FaceLandmarkerOrt {
 public:
     FaceLandmarkerOrt(const std::string& modelDir, int numFaces,
                       float minDetectionConfidence, float minPresenceConfidence);
+    // 从内存字节加载两个 ONNX 模型（供单 ONNX 自定义算子使用：模型以节点属性内嵌，无需磁盘文件）。
+    FaceLandmarkerOrt(const void* detectorData, size_t detectorSize,
+                      const void* landmarksData, size_t landmarksSize,
+                      int numFaces, float minDetectionConfidence, float minPresenceConfidence);
     ~FaceLandmarkerOrt();
 
     std::vector<DetectedFace> detect(const cv::Mat& imageBgr) const;

@@ -146,6 +146,25 @@ struct FaceLandmarkerOrt::Impl {
     float minDetConf = 0.5f;
     float minPresence = 0.5f;
 
+    void initThresholds(int faces, float minDet, float minPres) {
+        numFaces = faces;
+        minDetConf = minDet;
+        minPresence = minPres;
+        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    }
+
+    void cacheIoNames() {
+        Ort::AllocatorWithDefaultOptions alloc;
+        detInputName = det->GetInputNameAllocated(0, alloc).get();
+        lmkInputName = lmk->GetInputNameAllocated(0, alloc).get();
+        for (size_t i = 0; i < det->GetOutputCount(); ++i) {
+            detOutputNames.push_back(det->GetOutputNameAllocated(i, alloc).get());
+        }
+        for (size_t i = 0; i < lmk->GetOutputCount(); ++i) {
+            lmkOutputNames.push_back(lmk->GetOutputNameAllocated(i, alloc).get());
+        }
+    }
+
     static std::vector<Ort::Value> run(Ort::Session& session, const std::string& inputName,
                                        const std::vector<std::string>& outputNames, const cv::Mat& tensorHwc) {
         const std::array<int64_t, 4> shape{1, tensorHwc.rows, tensorHwc.cols, 3};
@@ -163,21 +182,20 @@ struct FaceLandmarkerOrt::Impl {
 FaceLandmarkerOrt::FaceLandmarkerOrt(const std::string& modelDir, int numFaces,
                                      float minDetectionConfidence, float minPresenceConfidence)
     : impl_(std::make_unique<Impl>()) {
-    impl_->numFaces = numFaces;
-    impl_->minDetConf = minDetectionConfidence;
-    impl_->minPresence = minPresenceConfidence;
-    impl_->opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    impl_->initThresholds(numFaces, minDetectionConfidence, minPresenceConfidence);
     impl_->det = std::make_unique<Ort::Session>(impl_->env, (modelDir + "/face_detector.onnx").c_str(), impl_->opts);
     impl_->lmk = std::make_unique<Ort::Session>(impl_->env, (modelDir + "/face_landmarks_detector.onnx").c_str(), impl_->opts);
-    Ort::AllocatorWithDefaultOptions alloc;
-    impl_->detInputName = impl_->det->GetInputNameAllocated(0, alloc).get();
-    impl_->lmkInputName = impl_->lmk->GetInputNameAllocated(0, alloc).get();
-    for (size_t i = 0; i < impl_->det->GetOutputCount(); ++i) {
-        impl_->detOutputNames.push_back(impl_->det->GetOutputNameAllocated(i, alloc).get());
-    }
-    for (size_t i = 0; i < impl_->lmk->GetOutputCount(); ++i) {
-        impl_->lmkOutputNames.push_back(impl_->lmk->GetOutputNameAllocated(i, alloc).get());
-    }
+    impl_->cacheIoNames();
+}
+
+FaceLandmarkerOrt::FaceLandmarkerOrt(const void* detectorData, size_t detectorSize,
+                                     const void* landmarksData, size_t landmarksSize,
+                                     int numFaces, float minDetectionConfidence, float minPresenceConfidence)
+    : impl_(std::make_unique<Impl>()) {
+    impl_->initThresholds(numFaces, minDetectionConfidence, minPresenceConfidence);
+    impl_->det = std::make_unique<Ort::Session>(impl_->env, detectorData, detectorSize, impl_->opts);
+    impl_->lmk = std::make_unique<Ort::Session>(impl_->env, landmarksData, landmarksSize, impl_->opts);
+    impl_->cacheIoNames();
 }
 
 FaceLandmarkerOrt::~FaceLandmarkerOrt() = default;

@@ -1,6 +1,8 @@
 // 命令行入口：
 //   high_onnx --input data/1.png --output out.png --config configs/default.yaml [--models models/]
 // 输出与 Python cli_process.py（常用模式 / default.yaml）对应的去高光结果，纯 CPU。
+#include <onnxruntime_cxx_api.h>
+
 #include <cstring>
 #include <iostream>
 #include <opencv2/imgcodecs.hpp>
@@ -18,6 +20,7 @@ void printUsage(const char* prog) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    Ort::InitApi();  // high_removal 库以 ORT_API_MANUAL_INIT 编译，可执行文件负责初始化 OrtApi
     std::string inputPath, outputPath, configPath, modelDir = "models", dumpPrefix;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];

@@ -25,6 +25,7 @@ struct Config {
 };
 
 Config loadConfig(const std::string& path);
+Config loadConfigFromString(const std::string& yamlText);  // 供自定义算子从节点属性加载配置
 
 // 参数读取：按名字列表顺序找第一个存在的键（对应 Python 的 _p 别名兼容逻辑）。
 double getF(const Section& s, std::initializer_list<const char*> names, double def);

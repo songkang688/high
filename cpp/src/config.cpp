@@ -36,8 +36,7 @@ static Section parseSection(const YAML::Node& node) {
     return out;
 }
 
-Config loadConfig(const std::string& path) {
-    const YAML::Node root = YAML::LoadFile(path);
+static Config parseConfig(const YAML::Node& root) {
     Config cfg;
     cfg.face_detection = parseSection(root["face_detection"]);
     cfg.regions = parseSection(root["regions"]);
@@ -45,6 +44,14 @@ Config loadConfig(const std::string& path) {
     cfg.highlight_removal = parseSection(root["highlight_removal"]);
     cfg.pipeline = parseSection(root["pipeline"]);
     return cfg;
+}
+
+Config loadConfig(const std::string& path) {
+    return parseConfig(YAML::LoadFile(path));
+}
+
+Config loadConfigFromString(const std::string& yamlText) {
+    return parseConfig(YAML::Load(yamlText));
 }
 
 double getF(const Section& s, std::initializer_list<const char*> names, double def) {
