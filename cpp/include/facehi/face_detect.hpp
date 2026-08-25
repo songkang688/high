@@ -37,6 +37,11 @@ class OnnxFaceLandmarker {
   OnnxFaceLandmarker(const std::string& detector_path, const std::string& landmark_path,
                      double min_detection_confidence, double min_presence_confidence,
                      int num_faces);
+  // 直接从内存字节构建（facehi.onnx 自定义算子内嵌子模型时使用）。
+  OnnxFaceLandmarker(const void* detector_bytes, size_t detector_size,
+                     const void* landmark_bytes, size_t landmark_size,
+                     double min_detection_confidence, double min_presence_confidence,
+                     int num_faces);
   ~OnnxFaceLandmarker();
 
   // 返回若干人脸的 478x3 关键点（图像像素坐标；z 乘 max(w,h)）。
@@ -50,6 +55,10 @@ class OnnxFaceLandmarker {
 // 对应 face_detect.detect_face（MediaPipe 优先，Haar+ROI 兜底）。
 DetectOutput detect_face(const cv::Mat& image_bgr, const Params& params,
                          const OnnxFaceLandmarker* landmarker);
+
+// 设置内存中的 Haar 级联 XML（facehi.onnx 内嵌 haar_xml 属性时使用；
+// 优先于磁盘路径查找，使兜底检测不依赖本机 OpenCV 数据目录）。
+void set_haar_cascade_xml(const std::string& xml_text);
 
 // 对应 scale_face_to_shape。
 FaceResult scale_face_to_shape(const FaceResult& face, double inv_scale, const cv::Size& size);

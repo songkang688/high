@@ -30,6 +30,9 @@ if(NOT ORT_ROOT)
   message(FATAL_ERROR "请设置 -DORT_ROOT=<onnxruntime 目录>")
 endif()
 
+# facehi_core 会被静态链入 facehi_custom_ops 共享库，必须 PIC。
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 add_library(facehi_core
   src/utils.cpp
   src/face_landmarks.cpp
@@ -46,12 +49,43 @@ target_include_directories(facehi_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${ORT_ROOT}/include
 )
+# ORT_API_MANUAL_INIT：facehi_core 不直接依赖 libonnxruntime 符号。
+# - 独立可执行文件（facehi_cpp）自行链接 onnxruntime 并在 main 里 Ort::InitApi()；
+# - 自定义算子库（facehi_custom_ops）不链接 onnxruntime，在 RegisterCustomOps
+#   中用宿主传入的 OrtApiBase 初始化（ORT 官方自定义算子库约定，避免同进程
+#   出现两份运行时）。
+target_compile_definitions(facehi_core PUBLIC ORT_API_MANUAL_INIT)
 target_link_directories(facehi_core PUBLIC ${ORT_ROOT}/lib)
+# 优先静态 yaml-cpp，使 facehi_custom_ops 除系统库外零运行时依赖。
+find_library(YAML_CPP_STATIC NAMES libyaml-cpp.a)
+if(YAML_CPP_STATIC)
+  set(FACEHI_YAML_CPP ${YAML_CPP_STATIC})
+else()
+  set(FACEHI_YAML_CPP yaml-cpp)
+endif()
 target_link_libraries(facehi_core PUBLIC
   ${OpenCV_LIBS}
-  yaml-cpp
-  onnxruntime
+  ${FACEHI_YAML_CPP}
 )
 
 add_executable(facehi_cpp tools/facehi_cli.cpp)
-target_link_libraries(facehi_cpp PRIVATE facehi_core)
+target_link_libraries(facehi_cpp PRIVATE facehi_core onnxruntime)
+
+# ORT 自定义算子共享库：唯一对外符号是 RegisterCustomOps。
+# 静态链入 facehi_core / OpenCV / yaml-cpp 后用 --exclude-libs 隐藏内部符号，
+# 避免与宿主进程中的其他 OpenCV 副本冲突。
+add_library(facehi_custom_ops SHARED src/custom_op.cpp)
+target_link_libraries(facehi_custom_ops PRIVATE facehi_core)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_link_options(facehi_custom_ops PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+
+# 单一 ONNX 入口的 CLI：只依赖 facehi.onnx + facehi_custom_ops，
+# 演示用户侧最小集成（Ort::Session + RegisterCustomOpsLibrary + Run）。
+add_executable(facehi_onnx_cli tools/facehi_onnx_cli.cpp)
+target_include_directories(facehi_onnx_cli PRIVATE ${ORT_ROOT}/include)
+target_link_directories(facehi_onnx_cli PRIVATE ${ORT_ROOT}/lib)
+target_link_libraries(facehi_onnx_cli PRIVATE
+  opencv_imgcodecs opencv_core
+  onnxruntime
+)

@@ -37,8 +37,9 @@ Params section_to_params(const YAML::Node& node) {
 
 }  // namespace
 
-Config load_config_yaml(const std::string& path) {
-  YAML::Node root = YAML::LoadFile(path);
+namespace {
+
+Config node_to_config(const YAML::Node& root) {
   Config cfg;
   cfg.face_detection = section_to_params(root["face_detection"]);
   cfg.regions = section_to_params(root["regions"]);
@@ -46,6 +47,27 @@ Config load_config_yaml(const std::string& path) {
   cfg.highlight_removal = section_to_params(root["highlight_removal"]);
   cfg.pipeline = section_to_params(root["pipeline"]);
   return cfg;
+}
+
+}  // namespace
+
+Config load_config_yaml(const std::string& path) {
+  return node_to_config(YAML::LoadFile(path));
+}
+
+Config load_embedded_config(const std::string& yaml_text, const std::string& mode_name) {
+  YAML::Node root = YAML::Load(yaml_text);
+  YAML::Node modes = root["modes"];
+  if (!modes || !modes.IsMap()) {
+    // 兼容直接给五段配置的扁平格式。
+    return node_to_config(root);
+  }
+  std::string mode = mode_name;
+  if (mode.empty() && root["default_mode"]) mode = root["default_mode"].as<std::string>();
+  YAML::Node picked = modes[mode];
+  if (!picked)
+    throw std::runtime_error("facehi.onnx 内嵌配置中不存在模式: " + mode);
+  return node_to_config(picked);
 }
 
 namespace {

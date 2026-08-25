@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include <onnxruntime_cxx_api.h>
+
 #include "facehi/config.hpp"
 #include "facehi/pipeline.hpp"
 #include "facehi/utils.hpp"
@@ -104,6 +106,7 @@ int process_one(const fs::path& input, const fs::path& output, const Config& cfg
 }  // namespace
 
 int main(int argc, char** argv) {
+  Ort::InitApi();  // facehi_core 以 ORT_API_MANUAL_INIT 编译，独立进程需手动初始化。
   std::string input, output, mode = "常用模式", repo_hint, landmarks_path, dump_dir, models_dir;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];

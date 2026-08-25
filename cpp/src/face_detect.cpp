@@ -3,7 +3,11 @@
 //（黄金图关键点最大误差 ≤ 0.036 px，纯推理引擎浮点噪声）。
 #include "facehi/face_detect.hpp"
 
+#include <unistd.h>
+
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/imgproc.hpp>
@@ -154,6 +158,19 @@ OnnxFaceLandmarker::OnnxFaceLandmarker(const std::string& detector_path,
   impl_->num_faces = num_faces;
 }
 
+OnnxFaceLandmarker::OnnxFaceLandmarker(const void* detector_bytes, size_t detector_size,
+                                       const void* landmark_bytes, size_t landmark_size,
+                                       double min_detection_confidence,
+                                       double min_presence_confidence, int num_faces)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->so.SetIntraOpNumThreads(1);
+  impl_->det = std::make_unique<Ort::Session>(impl_->env, detector_bytes, detector_size, impl_->so);
+  impl_->lmk = std::make_unique<Ort::Session>(impl_->env, landmark_bytes, landmark_size, impl_->so);
+  impl_->min_det = min_detection_confidence;
+  impl_->min_presence = min_presence_confidence;
+  impl_->num_faces = num_faces;
+}
+
 OnnxFaceLandmarker::~OnnxFaceLandmarker() = default;
 
 std::vector<cv::Mat> OnnxFaceLandmarker::detect(const cv::Mat& image_bgr) const {
@@ -284,12 +301,32 @@ std::vector<FaceResult> detect_with_landmarker(const cv::Mat& image_bgr, const P
   return out;
 }
 
+std::string& haar_xml_storage() {
+  static std::string xml;
+  return xml;
+}
+
 std::vector<FaceResult> detect_haar(const cv::Mat& image_bgr, const Params& params) {
   std::vector<FaceResult> out;
   cv::Mat gray;
   cv::cvtColor(image_bgr, gray, cv::COLOR_BGR2GRAY);
   static cv::CascadeClassifier cascade;
   static bool loaded = false;
+  if (!loaded) {
+    // 优先使用内存中的 XML（facehi.onnx 内嵌）。老格式级联只能经 load() 读取，
+    // 因此先落到临时文件再加载。
+    const std::string& mem_xml = haar_xml_storage();
+    if (!mem_xml.empty()) {
+      std::string tmp = (std::filesystem::temp_directory_path() /
+                         ("facehi_haar_" + std::to_string(::getpid()) + ".xml")).string();
+      std::ofstream f(tmp, std::ios::binary);
+      f << mem_xml;
+      f.close();
+      if (cascade.load(tmp)) loaded = true;
+      std::error_code ec;
+      std::filesystem::remove(tmp, ec);
+    }
+  }
   if (!loaded) {
     // OpenCV 安装数据目录。
     const char* env_path = std::getenv("OPENCV_HAAR_PATH");
@@ -389,6 +426,8 @@ const FaceResult* select_face(const std::vector<FaceResult>& faces, const std::s
 }
 
 }  // namespace
+
+void set_haar_cascade_xml(const std::string& xml_text) { haar_xml_storage() = xml_text; }
 
 DetectOutput detect_face(const cv::Mat& image_bgr, const Params& params,
                          const OnnxFaceLandmarker* landmarker) {
