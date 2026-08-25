@@ -58,6 +58,33 @@ python cli_process.py -i data/1.png
 方案与「Python 流程能否整体转成一个 ONNX 模型」的结论见 [`docs/ONNX_CPP_PLAN.md`](docs/ONNX_CPP_PLAN.md)，
 实测对拍数据见 [`tools/PARITY_RESULTS.md`](tools/PARITY_RESULTS.md)。
 
+## 单 ONNX 模型调用（推荐的最终交付形态）
+
+整条流水线已封装为**一个** ONNX 文件 `models/high_removal.onnx`（内嵌两个人脸网络权重与
+`configs/default.yaml` 全部配置）。因为 TELEA inpaint、连通域分析、动态分位数阈值等环节
+**无法用标准 ONNX 算子表达**（详见 `docs/ONNX_CPP_PLAN.md` 第一节），这里采用微软官方的
+「自定义算子封装外部推理运行时」方案：图中只有一个 `ai.high:HighlightRemoval` 自定义算子，
+内核就是上面对拍验证过的 C++ 流水线，编译为 `libhigh_removal_ops.so`
+（加载它是 ONNX Runtime 执行自定义算子的必需步骤，性质等同于安装 onnxruntime 本体）：
+
+```python
+import cv2
+import onnxruntime as ort
+
+so = ort.SessionOptions()
+so.register_custom_ops_library("cpp/build/libhigh_removal_ops.so")   # 见 cpp/README.md 构建
+sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
+
+image = cv2.imread("data/1.png")                                     # uint8 [H, W, 3] BGR
+result = sess.run(["result"], {"image": image})[0]                   # uint8 [H, W, 3] BGR
+cv2.imwrite("out.png", result)
+```
+
+完整示例：`python tools/run_high_onnx.py -i data/1.png -o out.png`（Python）、
+`cpp/build/high_onnx_session`（C++）。单 ONNX 会话输出与 C++ CLI **逐位相同**；
+与原始 Python 流程的实测差异为 17 张平均 MAE 0.0028/255、PSNR 72.55 dB、掩码 IoU 0.9996
+（非位级 100%，原因是推理引擎浮点尾差，见 `tools/PARITY_RESULTS.md`）。
+
 ## 说明
 
 - 本仓库未包含体积约 50MB+ 的 OpenCV LBF 兜底模型 `lbfmodel.yaml`；正常使用 MediaPipe 模型即可。

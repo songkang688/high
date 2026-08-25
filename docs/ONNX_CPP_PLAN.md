@@ -32,6 +32,15 @@
 
 **用户实际得到的方案**：C++（OpenCV + ONNX Runtime）完整移植——神经网络部分走 ONNX Runtime（由 `.task` 内原始 TFLite 精确转换而来，非第三方替代模型），传统 CV 部分用 OpenCV C++ 以 1:1 相同算法、相同参数移植。最终 C++ 输出与 Python 输出**逐像素高度一致但非位级 100% 相同**，差异来源见第六节；实际差异用配套脚本量化并如实记录在 `tools/PARITY_RESULTS.md`。
 
+**单文件调用形态（已落地，见第九节）**：在上述 C++ 移植之上，整条流水线进一步封装为**一个**可直接
+`session.run` 的 ONNX 文件 `models/high_removal.onnx`。注意这不是「把 TELEA 等塞进了标准算子图」——
+那仍然不可能——而是微软官方的「自定义算子封装外部推理运行时」方案
+（[add-custom-op.html](https://onnxruntime.ai/docs/reference/operators/add-custom-op.html) 之
+“Wrapping an external inference runtime in a custom operator”，配套工具
+[create_custom_op_wrapper.py](https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/custom_op_wrapper/create_custom_op_wrapper.py)）：
+图中只有一个 `ai.high:HighlightRemoval` 自定义算子节点，两个人脸网络与 `default.yaml`
+以节点属性内嵌，内核（`libhigh_removal_ops.so`）就是本仓库对拍验证过的 C++ 流水线。
+
 ---
 
 ## 二、仓库结构与现有 Python 推理链路
@@ -103,10 +112,10 @@
 3. **C++ CLI**：`high_onnx --input data/1.png --output out.png --config configs/default.yaml`，纯 CPU（与 Python `FORCE_CPU_ONLY=True` 一致），无 GPU 依赖。
 4. **对拍脚本** `tools/compare_python_cpp.py`：同一张图分别跑 Python `process_image` 与 C++ CLI，报告结果图 MAE / PSNR / 最大差、逐像素一致率，以及关键点最大偏差与高光掩码 IoU；结果写入 `tools/PARITY_RESULTS.md`。
 
-### 为什么不做「一个 ONNX 文件」的折中形态
+### 「一个 ONNX 文件」如何做才是对的（已按此落地）
 
-- 把两个网络 + NMS（ONNX 有 `NonMaxSuppression`）+ 裁剪采样拼成一张图**理论上可行**，但 TELEA inpaint、连通域、动态分位数仍然进不去——去高光核心必然留在图外。拼一半进图只会把「一次调用」变成「一次调用 + 一堆外部 CV 代码」，与两个独立 ONNX 相比没有收益，反而丢失 MediaPipe 语义的可验证性。
-- 若必须单文件交付，可把两个 ONNX 与 YAML 打包为自定义容器由 C++ 库统一加载，但这只是打包形式，不改变计算边界。本方案按两个 ONNX 文件交付。
+- 把两个网络 + NMS（ONNX 有 `NonMaxSuppression`）+ 裁剪采样拼成一张**纯标准算子**图**理论上可行**，但 TELEA inpaint、连通域、动态分位数仍然进不去——去高光核心必然留在图外。拼一半进图只会把「一次调用」变成「一次调用 + 一堆外部 CV 代码」，反而丢失 MediaPipe 语义的可验证性。**因此本仓库不提供、也不会伪造「纯标准算子」的单图。**
+- 正确做法是微软官方的 custom-op wrapper：单节点自定义算子图 + 自定义算子共享库。ONNX 文件承载全部权重与配置（用户只拷一个 onnx），共享库承载不可图化的算法（加载它是 ORT 执行自定义算子的必需步骤，与「装 onnxruntime 才能跑 onnx」同理）。第九节是落地细节。
 
 ### 可选延伸（时间允许才做）
 
@@ -159,3 +168,31 @@
   全部图片最大单像素差 10/255，高光硬掩码平均 IoU **0.9996**。
 - 剩余差异全部来自第六节列出的预期来源（推理引擎浮点尾差经整数栅格化在掩码边界放大、两侧 OpenCV 版本不同），
   与算法移植无关。
+
+## 九、单 ONNX 模型交付（已完成）
+
+在 C++ 移植之上，按微软官方 custom-op wrapper 方案交付**一个**可调用的 ONNX 模型：
+
+- **模型**：`models/high_removal.onnx`（约 5.1 MiB，由 `tools/export_high_removal_onnx.py` 生成）。
+  图中唯一节点为 `ai.high:HighlightRemoval`；`models/face_detector.onnx`、
+  `models/face_landmarks_detector.onnx` 与 `configs/default.yaml` 的完整字节以节点属性
+  （uint8 张量，属性名 `face_detector_model` / `face_landmarks_model` / `config_yaml`）内嵌，
+  用户无需再携带这三个文件。
+- **接口**：输入 `image` uint8 `[H, W, 3]`（BGR，H/W 为 dim_param 动态维）；输出
+  `result` uint8 `[H, W, 3]` 与 `hard_mask` uint8 `[H, W]`。未检测到人脸时与 Python 语义一致：
+  原样返回输入图、掩码全零。
+- **内核**：`cpp/src/custom_op.cpp` → `libhigh_removal_ops.so`，导出 ORT 约定的
+  `RegisterCustomOps` 入口；内核反序列化属性（`FaceLandmarkerOrt` 支持内存加载、
+  `loadConfigFromString` 解析内嵌 YAML）后调用与 CLI 完全相同的 `hr::processImage`。
+  按官方推荐**不链接 libonnxruntime**（`ORT_API_MANUAL_INIT`，OrtApi 由宿主传入），
+  因此同一个 .so 可被 Python `onnxruntime`（>= 1.22）或任意 C++ ORT 应用加载；
+  链接 `-z nodelete` 防止宿主 dlclose 时 OpenCV 常驻线程执行到已卸载代码。
+- **调用**：Python 见 `tools/run_high_onnx.py`（`register_custom_ops_library` + 一次
+  `session.run`，不依赖本仓库其它 Python 代码）；C++ 见 `cpp/tools/high_onnx_session.cpp`。
+- **实测**（`tools/compare_python_onnx_session.py`，17 张全量）：单 ONNX 会话输出与旧
+  `high_onnx` CLI 输出**逐位相同**（同一内核代码）；与原始 Python 流程平均 MAE **0.0028**/255、
+  平均 PSNR **72.55 dB**、硬掩码平均 IoU **0.9996**、最大单像素差 10/255——与此前
+  C++ CLI vs Python 的对拍结果完全一致。**不是位级 100%**，差异来源同第六节；
+  若要位级一致，唯一途径是 Python 侧也改用本 ONNX 会话调用（输出与 C++ 逐位相同）。
+- `onnxruntime-extensions` 提供的额外 CV 算子里没有 TELEA inpaint 与连通域分析，
+  对本流程无实质帮助，故未引入该依赖。

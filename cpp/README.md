@@ -15,6 +15,14 @@ Python 推理链路（`highlight_removal/`）的 1:1 移植：
 为什么不是位级 100% 一致、以及为什么整条流水线无法放进一个标准 ONNX 图，见
 [`docs/ONNX_CPP_PLAN.md`](../docs/ONNX_CPP_PLAN.md)。
 
+本目录现在构建三个产物：
+
+| 目标 | 说明 |
+|------|------|
+| `libhigh_removal_ops.so` | **主要交付物**：ORT 自定义算子库，`models/high_removal.onnx` 中 `ai.high:HighlightRemoval` 算子的内核（微软官方 custom-op wrapper 方案）。只导出 `RegisterCustomOps`，不链接 libonnxruntime（OrtApi 由宿主传入），可被 Python `onnxruntime`（>= 1.22）或任意 C++ ORT 应用加载 |
+| `high_onnx_session` | 单 ONNX 会话的最小 C++ 示例（RegisterCustomOpsLibrary + Ort::Session + Run） |
+| `high_onnx` | 旧的直接调用 C++ 库的 CLI（保留，输出与单 ONNX 会话逐位相同） |
+
 ## 依赖
 
 | 依赖 | 说明 |
@@ -45,9 +53,42 @@ make -j$(nproc)
 
 说明：若系统默认 `c++` 指向 clang 且缺少对应 libstdc++ 开发文件，请像上面一样显式指定 `g++`。
 
-## 运行
+## 运行（推荐）：单 ONNX 模型 + 自定义算子库
 
-在仓库根目录：
+`models/high_removal.onnx` 已内嵌两个人脸网络与 `configs/default.yaml`，用户只需要
+**一个 onnx 文件 + 一个 .so**（若模型或配置有改动，用
+`python tools/export_high_removal_onnx.py` 重新生成 onnx）。
+
+Python（只依赖 `onnxruntime` 与 `opencv-python`，不依赖本仓库其它代码）：
+
+```python
+import cv2
+import onnxruntime as ort
+
+so = ort.SessionOptions()
+so.register_custom_ops_library("cpp/build/libhigh_removal_ops.so")
+sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
+result = sess.run(["result"], {"image": cv2.imread("data/1.png")})[0]
+```
+
+或直接用现成脚本 / C++ 示例（在仓库根目录）：
+
+```bash
+python tools/run_high_onnx.py --input data/1.png --output out.png
+
+LD_LIBRARY_PATH=/opt/ort/onnxruntime-linux-x64-1.22.0/lib \
+  ./cpp/build/high_onnx_session --model models/high_removal.onnx \
+  --ops cpp/build/libhigh_removal_ops.so --input data/1.png --output out.png
+```
+
+接口：输入 `image` uint8 `[H, W, 3]`（BGR，与 `cv2.imread` 一致，H/W 动态）；
+输出 `result` uint8 `[H, W, 3]`（去高光结果）、`hard_mask` uint8 `[H, W]`（高光硬掩码）。
+
+说明：`.so` 是该自定义算子的内核实现，ONNX Runtime 执行自定义算子必须先注册它
+（与「运行任何 onnx 都要装 onnxruntime」同理）；运行期依赖系统 OpenCV 与 yaml-cpp
+（`sudo apt install libopencv-dev libyaml-cpp-dev` 装出来的运行库即可）。
+
+## 运行（旧 CLI，直接调 C++ 库）
 
 ```bash
 LD_LIBRARY_PATH=/opt/ort/onnxruntime-linux-x64-1.22.0/lib \
@@ -60,7 +101,7 @@ LD_LIBRARY_PATH=/opt/ort/onnxruntime-linux-x64-1.22.0/lib \
 - `--models/-m`：ONNX 模型目录，默认 `models`；
 - `--dump-masks 前缀`：另存高光硬/软掩码（调试用）。
 
-纯 CPU 运行，无任何 GPU 依赖（与 Python 侧 `FORCE_CPU_ONLY=True` 一致）。
+两条路径输出逐位相同；均为纯 CPU 运行，无任何 GPU 依赖（与 Python 侧 `FORCE_CPU_ONLY=True` 一致）。
 
 ## 与 Python 版的对齐范围
 
@@ -74,6 +115,7 @@ LD_LIBRARY_PATH=/opt/ort/onnxruntime-linux-x64-1.22.0/lib \
 ## 对拍
 
 ```bash
-python tools/compare_python_cpp.py            # 全部 data/*.png
+python tools/compare_python_cpp.py            # Python vs 旧 CLI，全部 data/*.png
+python tools/compare_python_onnx_session.py   # Python vs 单 ONNX 会话，全部 data/*.png
 python tools/compare_python_cpp.py --images data/1.png data/2.png
 ```
