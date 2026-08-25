@@ -2,13 +2,16 @@
 
 三种引擎模式（均使用 configs/default.yaml 同一套默认参数，保证公平对比）：
   - Python：highlight_removal.pipeline.process_image（MediaPipe + OpenCV 原始链路）；
-  - ONNX  ：models/high_removal.onnx + libhigh_removal_ops.so（配置已内嵌模型，单次 session.run）；
+  - ONNX  ：models/high_removal.onnx + 自定义算子库（配置已内嵌模型，单次 session.run）。
+            默认精确内核 libhigh_removal_pyops.so（与 Python 引擎逐位一致，MAE 恒为 0）；
+            设 HIGH_ONNX_KERNEL=cpp 切换 C++ 快速内核 libhigh_removal_ops.so（存在亚像素级浮点尾差）；
   - 对比  ：同一张图同时跑两个引擎，并排显示 原图 / Python / ONNX、差异热力图与量化指标。
 
 用法：
   python app_studio.py                                   # http://127.0.0.1:7861
   HIGH_STUDIO_HOST=0.0.0.0 HIGH_STUDIO_PORT=8080 python app_studio.py
-  HIGH_OPS_LIB=/path/to/libhigh_removal_ops.so python app_studio.py
+  HIGH_ONNX_KERNEL=cpp python app_studio.py              # ONNX 侧改用 C++ 快速内核
+  HIGH_OPS_LIB=/path/to/lib.so python app_studio.py      # 直接指定算子库文件
 
 完整调参调试台（全部滑杆与调试视图）仍是 python app.py（端口 7860）。
 """
@@ -150,6 +153,7 @@ def compare_metrics_markdown(
         f"耗时：Python **{py_elapsed:.2f}s** · ONNX **{onnx_elapsed:.2f}s**",
         "",
         "两引擎均使用 configs/default.yaml 同一套默认参数（ONNX 侧配置已内嵌模型）。"
+        f"当前 ONNX 内核：{'精确内核（与 Python 逐位一致，Python − ONNX 应为 0）' if onnx_session.selected_kernel() == onnx_session.KERNEL_EXACT else 'C++ 快速内核（存在亚像素级浮点尾差）'}。"
         "热力图按各自峰值归一，峰值见「最大像素差」列。",
     ]
     return "\n".join(lines)
@@ -300,7 +304,11 @@ def build_app() -> gr.Blocks:
             choices=ENGINES,
             value=default_engine,
             label="推理引擎",
-            info="Python = MediaPipe + OpenCV 原始链路；ONNX = 单文件模型 + 自定义算子库；对比 = 两者同时运行并量化差异",
+            info=(
+                "Python = MediaPipe + OpenCV 原始链路；ONNX = 单文件模型 + 自定义算子库"
+                "（默认精确内核，与 Python 逐位一致；HIGH_ONNX_KERNEL=cpp 切换 C++ 快速内核）；"
+                "对比 = 两者同时运行并量化差异"
+            ),
         )
         with gr.Row():
             with gr.Column(scale=1, min_width=280):
@@ -325,7 +333,9 @@ def build_app() -> gr.Blocks:
                     elem_id="status-box",
                 )
                 gr.Markdown(
-                    "ONNX 引擎需要已编译的 `libhigh_removal_ops.so`（见 `cpp/README.md`）。\n\n"
+                    "ONNX 引擎需要已编译的自定义算子库（见 `cpp/README.md`）：默认精确内核 "
+                    "`libhigh_removal_pyops.so`（与 Python 引擎逐位一致），"
+                    "`HIGH_ONNX_KERNEL=cpp` 切换 C++ 快速内核 `libhigh_removal_ops.so`。\n\n"
                     "高级参数调试请运行 `python app.py`（端口 7860）。",
                     elem_id="hint-note",
                 )

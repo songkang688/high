@@ -72,6 +72,28 @@ target_link_options(high_removal_ops PRIVATE
   # 其常驻工作线程执行到已解除映射的代码（进程退出阶段的段错误）。
   "-Wl,-z,nodelete")
 
+# 精确内核蹦床：同一 ai.high:HighlightRemoval 签名，Compute 时经 CPython C API 调用
+# 宿主进程内的 highlight_removal.exact_kernel（原始 Python 流水线本体），
+# 因此 session.run 与 Python process_image 逐位相同。
+# 只依赖 ORT 头文件 + Python 头文件（Py_LIMITED_API 稳定 ABI，Python >= 3.10）；
+# 刻意不链接 libpython——符号由宿主 Python 解释器提供，纯 C++ 宿主无法加载本库（预期行为）。
+find_package(Python3 COMPONENTS Development.Module)
+if(Python3_Development.Module_FOUND)
+  add_library(high_removal_pyops SHARED src/py_custom_op.cpp)
+  target_include_directories(high_removal_pyops PRIVATE ${ORT_INCLUDE_DIR} ${Python3_INCLUDE_DIRS})
+  target_compile_definitions(high_removal_pyops PRIVATE ORT_API_MANUAL_INIT)
+  target_link_libraries(high_removal_pyops PRIVATE ${CMAKE_DL_LIBS})
+  set_target_properties(high_removal_pyops PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
+  target_link_options(high_removal_pyops PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/high_removal_ops.version"
+    # 不加 --no-undefined：Python C API 符号在运行时由宿主解释器解析。
+    "-Wl,-z,nodelete")
+else()
+  message(WARNING "未找到 Python3 开发头文件（python3-dev），跳过精确内核 libhigh_removal_pyops.so")
+endif()
+
 # 单 ONNX 会话示例（新的主要调用方式）：标准 ORT 应用，只依赖 ORT + OpenCV imgcodecs。
 add_executable(high_onnx_session tools/high_onnx_session.cpp)
 target_include_directories(high_onnx_session PRIVATE ${ORT_INCLUDE_DIR})

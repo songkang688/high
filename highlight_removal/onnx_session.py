@@ -1,11 +1,21 @@
-"""单 ONNX 模型（models/high_removal.onnx + libhigh_removal_ops.so）的进程内共享会话。
+"""单 ONNX 模型（models/high_removal.onnx + 自定义算子库）的进程内共享会话。
+
+同一个 ONNX 文件支持两个可互换的内核库（图不需要任何改动，注册哪个库就用哪个内核）：
+
+  - 精确内核 libhigh_removal_pyops.so（默认）：Compute 时在宿主进程内调用原始
+    Python 流水线（highlight_removal.exact_kernel → process_image，MediaPipe +
+    pip OpenCV 本体），session.run 输出与直接调用 process_image **逐位相同**；
+  - C++ 快速内核 libhigh_removal_ops.so：完整 C++ 移植（ORT 关键点 + OpenCV C++），
+    不依赖 Python/MediaPipe，可被纯 C++ 宿主加载，但与 Python 存在亚像素级浮点尾差
+    （实测见 tools/PARITY_RESULTS.md）。
+
+选择方式：
+  - 环境变量 HIGH_ONNX_KERNEL=exact（默认）或 cpp；
+  - 环境变量 HIGH_OPS_LIB=/path/to/lib.so 直接指定库文件（优先级最高）。
 
 调用方式与 tools/run_high_onnx.py 完全一致（该脚本刻意保持零仓库依赖、可单独分发，
-因此不从这里导入）。本模块给仓库内代码（如 app_studio.py）提供：
-
-  - 算子库路径解析：环境变量 HIGH_OPS_LIB 优先，其次 cpp/build/libhigh_removal_ops.so；
-  - 惰性单例 InferenceSession：首次调用时构建，之后复用，避免每次点击重建会话；
-  - uint8 HWC BGR 输入 / 输出的推理封装（与 cv2.imread / cv2.imwrite 直接对接）。
+因此不从这里导入）。本模块给仓库内代码（如 app_studio.py）提供惰性单例
+InferenceSession 与 uint8 HWC BGR 输入/输出的推理封装。
 """
 from __future__ import annotations
 
@@ -18,8 +28,12 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_PATH = ROOT / "models" / "high_removal.onnx"
-DEFAULT_OPS_PATH = ROOT / "cpp" / "build" / "libhigh_removal_ops.so"
+EXACT_OPS_PATH = ROOT / "cpp" / "build" / "libhigh_removal_pyops.so"
+CPP_OPS_PATH = ROOT / "cpp" / "build" / "libhigh_removal_ops.so"
 OPS_ENV_VAR = "HIGH_OPS_LIB"
+KERNEL_ENV_VAR = "HIGH_ONNX_KERNEL"
+KERNEL_EXACT = "exact"
+KERNEL_CPP = "cpp"
 
 _lock = threading.Lock()
 _session = None
@@ -30,12 +44,19 @@ class OnnxEngineUnavailable(RuntimeError):
     """ONNX 引擎不可用（缺算子库 / 模型 / onnxruntime），message 为可直接展示的中文提示。"""
 
 
+def selected_kernel() -> str:
+    """当前内核选择：环境变量 HIGH_ONNX_KERNEL（exact 默认 / cpp）。"""
+    raw = os.environ.get(KERNEL_ENV_VAR, "").strip().lower()
+    return KERNEL_CPP if raw == KERNEL_CPP else KERNEL_EXACT
+
+
 def build_hint() -> str:
     """算子库缺失时的构建指引（与 cpp/README.md 一致）。"""
     return (
-        f"未找到自定义算子库（默认路径 {DEFAULT_OPS_PATH}，也可用环境变量 {OPS_ENV_VAR} 指定）。\n"
-        "请按 cpp/README.md 构建：\n"
-        "  sudo apt install cmake g++ libopencv-dev libyaml-cpp-dev\n"
+        f"未找到自定义算子库（精确内核默认路径 {EXACT_OPS_PATH}，C++ 内核 {CPP_OPS_PATH}；\n"
+        f"也可用环境变量 {OPS_ENV_VAR} 指定库文件，{KERNEL_ENV_VAR}=exact/cpp 切换内核）。\n"
+        "请按 cpp/README.md 构建（两个库由同一次 cmake/make 产出）：\n"
+        "  sudo apt install cmake g++ libopencv-dev libyaml-cpp-dev python3-dev\n"
         "  # 从 https://github.com/microsoft/onnxruntime/releases 下载并解压 onnxruntime-linux-x64-1.22.0.tgz\n"
         "  cd cpp && mkdir -p build && cd build\n"
         "  cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ \\\n"
@@ -45,14 +66,15 @@ def build_hint() -> str:
 
 
 def resolve_ops_library() -> Optional[Path]:
-    """解析算子库路径：HIGH_OPS_LIB 优先，其次仓库默认构建产物；找不到返回 None。"""
+    """解析算子库路径：HIGH_OPS_LIB 最优先，其次按 HIGH_ONNX_KERNEL 选默认构建产物。"""
     env = os.environ.get(OPS_ENV_VAR, "").strip()
     if env:
         p = Path(env).expanduser()
         if not p.is_absolute():
             p = (ROOT / p).resolve()
         return p if p.is_file() else None
-    return DEFAULT_OPS_PATH if DEFAULT_OPS_PATH.is_file() else None
+    default = EXACT_OPS_PATH if selected_kernel() == KERNEL_EXACT else CPP_OPS_PATH
+    return default if default.is_file() else None
 
 
 def _missing_ops_message() -> str:
@@ -76,7 +98,8 @@ def availability() -> Tuple[bool, str]:
         import onnxruntime  # noqa: F401
     except ImportError:
         return False, "未安装 onnxruntime，请执行 pip install onnxruntime。"
-    return True, f"ONNX 引擎就绪（算子库：{ops}）。"
+    kernel_note = "精确内核（与 Python 流水线逐位一致）" if selected_kernel() == KERNEL_EXACT else "C++ 快速内核"
+    return True, f"ONNX 引擎就绪（{kernel_note}，算子库：{ops}）。"
 
 
 def get_session(model_path: str | Path | None = None, ops_library: str | Path | None = None):
