@@ -1,0 +1,115 @@
+#「强力」去高光配置 —— 供 models/high_removal_strong.onnx 内嵌使用。
+# 基于 configs/default.yaml，仅加强 highlight_detection / highlight_removal，
+# 面部保护（眼睛/嘴唇等，simple_protect_mode）与 default 完全一致，不做削弱。
+runtime:
+  device: CPU
+  mode: CPU狂暴模式
+  threads: 0
+  gpu_enabled: false
+
+pipeline:
+  process_scale: compromise
+  enable_roi_removal: true
+  roi_padding_ratio: 0.12
+  refine_upsampled_masks: false
+  enable_visualization: true
+
+models:
+  mediapipe_face_landmarker_task: "models/face_landmarker.task"
+  yunet_model: "models/face_detection_yunet_2023mar.onnx"
+  opencv_dnn_prototxt: "models/deploy.prototxt"
+  opencv_dnn_caffemodel: "models/res10_300x300_ssd_iter_140000.caffemodel"
+
+face_detection:
+  face_detection_confidence: 0.50
+  landmark_detection_confidence: 0.50
+  enable_mediapipe: true
+  enable_fallback_detector: true
+  max_faces: 4
+  low_confidence_warning_threshold: 0.65
+  multi_face_strategy: "最大人脸"
+  manual_face_index: 0
+  enable_alignment: false
+  show_landmark_index: false
+  mediapipe_task_model_path: "models/face_landmarker.task"
+  lbf_model_path: "models/lbfmodel.yaml"
+  haar_scale_factor: 1.08
+  haar_min_neighbors: 5
+  allow_weak_fallback_for_debug: false
+
+regions:
+  nose_bridge_expand_ratio: 0.145
+  nose_tip_expand_ratio: 0.96
+  forehead_height_ratio: 1.54
+  cheek_expand_ratio: 1.10
+  chin_expand_ratio: 1.04
+  protect_expand_radius: 5
+  eye_protect_extra_radius: 1.0
+  simple_protect_mode: true
+  key_region_detection_mode: false
+  protect_brows: true
+  brow_protect_shrink_radius: 0
+  brow_protect_height_ratio: 2.30
+  brow_protect_width_ratio: 1.60
+  brow_vertical_shift_ratio: 0.00
+  brow_ridge_height_ratio: 0.82
+  lip_protect_shrink_radius: 2
+  philtrum_unprotect: true
+  philtrum_width_ratio: 0.16
+  skin_mask_smooth_radius: 4
+  face_contour_shrink_ratio: 0.018
+
+highlight_detection:
+  # 基础绝对阈值。实际检测以区域自适应为主，绝对阈值只作为强证据之一。
+  rgb_brightness_threshold: 192
+  hsv_v_threshold: 178
+  hsv_s_upper: 158
+  lab_l_threshold: 165
+  local_brightness_threshold: 3
+  local_contrast_threshold: 0.018
+  saturation_pixel_threshold: 240
+  highlight_min_area: 5
+  highlight_max_area_ratio: 0.22
+  mask_dilate_radius: 3
+  mask_erode_radius: 0
+  mask_blur_radius: 8
+
+  # 暖色油光增强：用于额头、鼻梁、鼻尖、脸颊、下巴这类非纯白反光。
+  oil_shine_s_upper: 188
+  adaptive_region_delta: 3.4
+  adaptive_core_delta: 5.8
+  adaptive_halo_percentile: 72
+  adaptive_core_percentile: 84
+  adaptive_grow_iterations: 22
+  relative_saturation_drop: -8.0
+  morph_close_radius: 5
+  soft_mask_gain: 2.20
+  local_sigma: 6.0
+  large_local_sigma: 28.0
+  local_skin_chroma_delta_upper: 42
+  fallback_seed_percentile: 93
+  max_component_expand_ratio: 1.35
+
+  forehead_region_max_fraction: 0.35
+  nose_bridge_region_max_fraction: 0.72
+  nose_tip_region_max_fraction: 0.62
+  cheek_region_max_fraction: 0.26
+  skin_region_max_fraction: 0.35
+  chin_region_max_fraction: 0.24
+  philtrum_region_max_fraction: 0.32
+  brow_region_max_fraction: 0.28
+
+highlight_removal:
+  mode: "混合"
+  brightness_suppress_strength: 0.99
+  chroma_restore_strength: 0.42
+  texture_preserve_strength: 0.42
+  edge_protect_strength: 0.20
+  inpainting_radius: 8
+  poisson_alpha_strength: 0.90
+  final_blend_alpha: 1.00
+  max_allowed_modify_area_ratio: 0.28
+  max_allowed_mean_brightness_change: 32
+  max_allowed_local_color_delta: 22
+  faithful_luminance_floor: 0.52
+  extreme_core_extra_l: 16
