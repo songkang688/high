@@ -13,7 +13,7 @@
 | 烘焙 mode | `日常模式`（节点属性 `mode` 与 YAML `default_mode` 均为该值，指向独立配置段） |
 | 谱系 | facehi（`ai.facehi:HighlightRemoval`），**非** high_removal.onnx |
 | 内核 | 与 `facehi.onnx` 完全相同，共用 `lib/libfacehi_custom_ops.so`（Windows 为 `lib/facehi_custom_ops.dll`），未改任何 C++ |
-| 生成方式 | `python git-high2/onnx/make_facehi_onnx.py --preset daily`（完整仓库内运行） |
+| 生成方式 | `python onnx/make_facehi_onnx.py --preset daily --out git-high2/models/facehi_daily.onnx`（完整仓库内运行，四档同一脚本） |
 
 ## 烘焙参数：强力档与保护细节档的逐项中值
 
@@ -52,8 +52,9 @@
 local_contrast_threshold 0.026、saturation_pixel_threshold 244、
 mask_dilate/erode/blur_radius 1/1/9、oil_shine_s_upper 175、
 morph_close_radius 3、forehead/nose_tip/cheek/brow_region_max_fraction
-0.285/0.55/0.20/0.30。完整数值见
-`git-high2/onnx/make_facehi_onnx.py` 的 `DAILY_DETECTION` / `DAILY_REMOVAL`。
+0.285/0.55/0.20/0.30。完整数值见仓库根
+`onnx/make_facehi_onnx.py` 的 `PRESETS["daily"]`（已实测：该预设复现的
+mode 与 config_yaml 与本文件描述的已提交模型逐字节一致）。
 
 ## 用法
 

@@ -12,18 +12,29 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 
 推荐落地位置：**Linux/macOS `~/git-high2`，Windows `%USERPROFILE%\git-high2`**。
 
-## 模型档位
+## 模型档位（四档）
 
 同一套 `ai.facehi:HighlightRemoval` 自定义算子内核，按烘焙进节点属性的
-`mode` 分成互相独立的 onnx 文件（共用同一 `lib/libfacehi_custom_ops.so`）：
+`mode` / 配置段分成互相独立的 onnx 文件（共用同一
+`lib/libfacehi_custom_ops.so`）。强度：强力 ＞ 默认 ＞ 日常 ＞ 保护细节。
+variant 键与 `facehi_onnx.MODEL_VARIANTS` 一致：
 
-| 文件 | 档位 | 烘焙 mode | 特点 |
+| variant | 文件 | 烘焙 mode | 特点 |
 | --- | --- | --- | --- |
-| `models/facehi.onnx` | 常用（强力向） | 常用模式 | 检测=灵敏、修复=强力，默认档 |
-| `models/facehi_daily.onnx` | **日常/平衡** | 日常模式（独立中值配置） | 高光检测与修复各参数取强力档与保护细节档两端烘焙值的中值（rgb 阈值 205、修复压制 0.825、final_blend 0.905 等）；method=混合、process_scale=compromise，详见 `models/DAILY.md` |
+| `default` | `models/facehi.onnx` | 常用模式 | 检测=灵敏、修复=强力，默认档 |
+| `strong` | `models/facehi_strong.onnx` | 强力模式 | 去高光最狠、细节保护最少（强修复分支覆盖整个高光核心） |
+| `daily` | `models/facehi_daily.onnx` | 日常模式 | **日常/平衡**：高光检测与修复各参数取强力/保护细节两端烘焙值的中值（rgb 阈值 205、修复压制 0.825、final_blend 0.905 等），method=混合、process_scale=compromise，详见 `models/DAILY.md` |
+| `detail` | `models/facehi_detail.onnx` | 保护细节 | 去高光最弱、纹理保留最多（弱检测 + 削弱混合修复，Telea 仅近饱和核心） |
 
-重新生成：`python git-high2/onnx/make_facehi_onnx.py --preset daily`
-（`--preset standard` 对应 facehi.onnx；需在完整仓库内运行）。
+> 本分支只随附 `facehi.onnx` 与 `facehi_daily.onnx`；`strong` / `detail`
+> 的模型文件在各自分支（合并后齐全）。缺某档文件时 `find_model` 返回
+> None、前端选中该档会提示，不影响其余档。每档可用环境变量覆盖模型路径：
+> 默认档 `FACEHI_ONNX_MODEL`，其它档 `FACEHI_ONNX_MODEL_STRONG` /
+> `_DAILY` / `_DETAIL`。
+
+重新生成（需在完整仓库内运行，四档同一脚本）：
+`python onnx/make_facehi_onnx.py --preset daily --out git-high2/models/facehi_daily.onnx`
+（`--preset standard / strong / detail` 同理）。
 
 ## 为什么选这个 ONNX
 
@@ -41,12 +52,12 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 ```
 git-high2/
 ├── README.md                 # 本文件
-├── models/facehi.onnx        # 常用档（强力向）对外模型
+├── models/facehi.onnx        # 默认档（常用模式，强力向）对外模型
 ├── models/facehi_daily.onnx  # 日常/平衡档（烘焙独立「日常模式」中值配置，见 models/DAILY.md）
 ├── models/DAILY.md           # 日常/平衡档说明与验证记录
+│                             # （facehi_strong.onnx / facehi_detail.onnx 由各自分支提供）
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
-├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
-├── onnx/make_facehi_onnx.py  # 模型生成脚本（--preset standard / daily）
+├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path, variant=...) 四档
 ├── requirements.txt          # 运行依赖（版本放宽）
 ├── lib/                      # 自定义算子库：libfacehi_custom_ops.so（Linux x86-64）
 │                             #             + facehi_custom_ops.dll（Windows x64）
@@ -54,6 +65,9 @@ git-high2/
 └── cpp/                      # 编译自定义算子库所需的精简源码 + CMakeLists
                               #（含 cmake/mingw-w64-x86_64.cmake 交叉编译 toolchain）
 ```
+
+模型生成脚本在仓库根：`onnx/make_facehi_onnx.py`
+（`--preset standard / strong / daily / detail` 四档同一脚本）。
 
 ## 快速开始
 
@@ -211,9 +225,10 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 | `highlight_mask` | 输出 | uint8 | `[H,W]` | 最终硬掩码 |
 
 模式：`facehi.onnx` 烘焙「常用模式」，`facehi_daily.onnx` 烘焙独立的
-「日常模式」（日常/平衡，强力档与保护细节档的逐项中值配置）。两者接口
-完全相同；需要其它档位可在仓库内用
-`git-high2/onnx/make_facehi_onnx.py --preset <名称>` 重新生成。
+「日常模式」（日常/平衡，强力档与保护细节档的逐项中值配置），
+`facehi_strong.onnx` / `facehi_detail.onnx` 分别烘焙「强力模式」/「保护细节」。
+四档接口完全相同；可在仓库内用根目录
+`onnx/make_facehi_onnx.py --preset <standard|strong|daily|detail>` 重新生成。
 
 ## 验证记录（本交付包实测）
 
