@@ -160,7 +160,9 @@ def main() -> int:
         "`process_image`，无独立实现，故不单列）；",
         f"- 环境：{cpu}，{platform.system()} {platform.machine()}，Python {platform.python_version()}，"
         f"onnxruntime {ort.__version__}，opencv {cv2.__version__}，mediapipe {mediapipe.__version__}；",
-        f"- 算子库：精确内核 `{exact_lib.name}`，C++ 内核 `{cpp_lib.name}`（cpp/ 构建，见 cpp/README.md）。",
+        f"- 算子库：精确内核 `{exact_lib.name}`，C++ 内核 `{cpp_lib.name}`（cpp/ 构建，见 cpp/README.md）；",
+        "- 宿主 onnxruntime 版本：精确内核 pip ≥ 1.22 即可；C++ 快速内核在 Python 宿主下需 pip ≥ 1.23"
+        "（1.22.x 存在嵌套建会话的 LoggingManager 冲突，见 cpp/README.md）。",
         "",
         "| 图片 | python_orig (ms) | onnx_exact (ms) | onnx_cpp (ms) | exact/python | cpp/python |",
         "|------|-----------------|-----------------|---------------|--------------|------------|",

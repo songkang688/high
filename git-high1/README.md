@@ -46,6 +46,10 @@ pip install onnxruntime opencv-contrib-python mediapipe gradio numpy PyYAML Pill
 只用 **C++ 快速内核**跑命令行时最小依赖仅为 `onnxruntime opencv-python numpy`；
 精确内核 / Python 引擎 / 前端 需要完整一行（mediapipe、gradio 等）。
 
+版本注意：精确内核任何 pip onnxruntime ≥ 1.22 均可；**C++ 快速内核在 Python 宿主下
+需要 pip onnxruntime ≥ 1.23**（1.22.x 的 Python 绑定与内核嵌套建会话存在 LoggingManager
+冲突，详见仓库 `cpp/README.md`）。
+
 ## 启动前端
 
 ```bash

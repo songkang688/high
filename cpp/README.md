@@ -149,8 +149,14 @@ LD_LIBRARY_PATH=/opt/ort/onnxruntime-linux-x64-1.22.0/lib \
 说明：`.so` 是该自定义算子的内核实现，ONNX Runtime 执行自定义算子必须先注册它
 （与「运行任何 onnx 都要装 onnxruntime」同理）。C++ 内核运行期依赖系统 OpenCV 与 yaml-cpp
 （`sudo apt install libopencv-dev libyaml-cpp-dev` 装出来的运行库即可）；
-精确内核**只能被 Python 宿主加载**（刻意不链接 libpython，符号由宿主解释器提供，
+精确内核**只能被 Python 宿主加载**（Linux 刻意不链接 libpython，符号由宿主解释器提供，
 CPython 稳定 ABI，Python ≥ 3.10），纯 C++ 宿主 dlopen 会因符号缺失失败——那种场景用 C++ 内核。
+
+宿主 onnxruntime 版本（实测）：精确内核任何 pip onnxruntime ≥ 1.22 均可；
+**C++ 快速内核在 Python 宿主下需要 pip onnxruntime ≥ 1.23** —— 1.22.x 的 Python 绑定
+不经 OrtEnv 单例创建日志环境，内核首次 Compute 嵌套 `CreateEnv`（人脸模型子会话需要）时
+触发「Only one instance of LoggingManager …」报错（1.23.0 起正常）；
+纯 C++ 宿主（如 `high_onnx_session` + ORT 1.22 动态库）不受影响。
 
 ## 运行（旧 CLI，直接调 C++ 库）
 
