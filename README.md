@@ -4,6 +4,13 @@
 
 本仓库为**核心源码 + 样例图 + 人脸关键点模型**，不含 Windows 便携包内置 Python（体积过大）。
 
+## git-high2：效果最好的 ONNX 一键交付包
+
+- 目录 [`git-high2/`](git-high2/README.md) 自包含**最佳 ONNX 模型** `models/facehi.onnx`（与 Python 位级一致）+ Python/ONNX/对比 三页签前端。
+- 克隆后整夹拷到本机：Linux/macOS `cp -a git-high2 ~/git-high2`，Windows 复制到 `%USERPROFILE%\git-high2`。
+- 启动：`python git-high2/app_git_high2.py` → http://127.0.0.1:7862 （不影响本页下方的生产入口与默认算法）。
+- 运行 ONNX 需注册自定义算子库 `libfacehi_custom_ops.so`（`git-high2/lib/`，编译方法见其 README）。
+
 ## 目录说明
 
 | 路径 | 说明 |
