@@ -145,3 +145,17 @@
 3. **Phase B2**：`cpp/` 工程（结构见第三节表格），CMake + OpenCV + ONNX Runtime + yaml-cpp，纯 CPU。
 4. **Phase C**：`tools/compare_python_cpp.py` 对 `data/*.png` 全量对拍，结果写 `tools/PARITY_RESULTS.md`；如环境无法编译 C++，如实记录失败原因与已验证部分。
 5. 文档：`cpp/README.md`（构建/运行）+ 主 README 链接。
+
+## 八、实测结果（已完成）
+
+以上步骤已全部落地，实测数据如下（细节见 [`tools/PARITY_RESULTS.md`](../tools/PARITY_RESULTS.md)）：
+
+- **ONNX 转换**：`.task` 内两个 TFLite 经 tf2onnx 转出后，随机输入对拍 TFLite 解释器 vs ONNX Runtime，
+  最大输出差约 1e-6（浮点尾差量级），确认权重级无损。
+- **关键点对拍**：C++/ONNX 关键点链路 vs MediaPipe 原生输出，在原分辨率与 1/4 分辨率
+  （流水线实际使用的检测分辨率）上，478 点 xy 最大偏差 **< 0.25 px**，人脸数与 presence 分数一致。
+- **端到端对拍（17 张样例图，default.yaml 全默认路径）**：
+  平均 MAE **0.0028**/255，平均 PSNR **72.55 dB**，差异像素占比最高 1.05%，
+  全部图片最大单像素差 10/255，高光硬掩码平均 IoU **0.9996**。
+- 剩余差异全部来自第六节列出的预期来源（推理引擎浮点尾差经整数栅格化在掩码边界放大、两侧 OpenCV 版本不同），
+  与算法移植无关。
