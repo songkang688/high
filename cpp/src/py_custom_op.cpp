@@ -9,8 +9,10 @@
 //
 // 约束（如实声明）：
 //   - 宿主必须是 Python 进程（Python onnxruntime 的 register_custom_ops_library）。
-//     本库刻意不链接 libpython（Py_LIMITED_API 稳定 ABI，符号由宿主解释器提供），
+//     Linux：刻意不链接 libpython（Py_LIMITED_API 稳定 ABI，符号由宿主解释器提供），
 //     纯 C++ 宿主 dlopen 时会因符号缺失直接失败——那种场景请用 libhigh_removal_ops.so。
+//     Windows：PE 不允许未定义符号，链接稳定 ABI 导入库 python3.lib（运行期解析到
+//     宿主 CPython 自带的 python3.dll），语义不变：Compute 仍要求 Py_IsInitialized。
 //   - 需要本仓库的 highlight_removal 包与 models/face_landmarker.task 可被导入：
 //     默认按本 .so 自身位置推导仓库根（cpp/build/ 的上两级），也可用环境变量
 //     HIGH_PY_KERNEL_PATH 显式指定仓库根目录。
@@ -20,7 +22,13 @@
 
 #include <onnxruntime_cxx_api.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <array>
 #include <cstdint>
@@ -98,19 +106,50 @@ std::string fetchPyError() {
     return out;
 }
 
-// 由本 .so 自身路径推导仓库根：<repo>/cpp/build/libhigh_removal_pyops.so → <repo>。
-// 顺序：环境变量 > 上两级（默认构建位置对应仓库根）> 上一级 > 库所在目录。
+// 本库自身的文件路径：Linux 用 dladdr；Windows 用 GetModuleHandleEx（由函数地址反查
+// HMODULE，不增加引用计数）+ GetModuleFileNameA。取不到时返回空串。
+std::string selfLibraryPath() {
+#ifdef _WIN32
+    HMODULE mod = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(&selfLibraryPath), &mod) == 0 ||
+        mod == nullptr) {
+        return {};
+    }
+    char buf[4096];
+    const DWORD n = GetModuleFileNameA(mod, buf, static_cast<DWORD>(sizeof(buf)));
+    if (n == 0 || n >= sizeof(buf)) return {};
+    return std::string(buf, static_cast<size_t>(n));
+#else
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&selfLibraryPath), &info) == 0 || info.dli_fname == nullptr) {
+        return {};
+    }
+    return info.dli_fname;
+#endif
+}
+
+// 由本 .so/.dll 自身路径推导仓库根：<repo>/cpp/build/libhigh_removal_pyops.so → <repo>。
+// 顺序：环境变量 > 上层目录（默认构建位置对应仓库根）> ... > 库所在目录。
+// Windows 多配置生成器多一层（cpp/build/Release/high_removal_pyops.dll），因此多爬一级；
+// 路径分隔符同时接受 '\' 与 '/'。
 std::vector<std::string> candidateRepoRoots() {
     std::vector<std::string> roots;
     if (const char* env = std::getenv(kEnvKernelPath); env != nullptr && env[0] != '\0') {
         roots.emplace_back(env);
     }
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&candidateRepoRoots), &info) != 0 && info.dli_fname != nullptr) {
+    std::string dir = selfLibraryPath();
+    if (!dir.empty()) {
+#ifdef _WIN32
+        constexpr int kMaxUps = 4;  // 库目录、build、cpp、仓库根
+        constexpr const char* kSeparators = "/\\";
+#else
+        constexpr int kMaxUps = 3;  // 库目录、上一级、上两级
+        constexpr const char* kSeparators = "/";
+#endif
         std::vector<std::string> ups;
-        std::string dir(info.dli_fname);
-        for (int up = 0; up < 3; ++up) {  // 库目录、上一级、上两级
-            const size_t slash = dir.find_last_of('/');
+        for (int up = 0; up < kMaxUps; ++up) {
+            const size_t slash = dir.find_last_of(kSeparators);
             if (slash == std::string::npos || slash == 0) break;
             dir.resize(slash);
             ups.push_back(dir);
@@ -268,7 +307,14 @@ struct ExactOp : Ort::CustomOpBase<ExactOp, ExactKernel, /*WithStatus=*/true> {
 
 }  // namespace
 
-extern "C" __attribute__((visibility("default"))) OrtStatus* ORT_API_CALL
+// Windows 侧导出由 src/high_removal_ops.def（EXPORTS RegisterCustomOps）声明，
+// 与 Linux 的 version script 对应；ELF 侧仍需显式 default visibility。
+#ifdef _WIN32
+#define HR_ORT_EXPORT
+#else
+#define HR_ORT_EXPORT __attribute__((visibility("default")))
+#endif
+extern "C" HR_ORT_EXPORT OrtStatus* ORT_API_CALL
 RegisterCustomOps(OrtSessionOptions* options, const OrtApiBase* apiBase) {
     const OrtApi* api = apiBase->GetApi(ORT_API_VERSION);
     if (api == nullptr) {

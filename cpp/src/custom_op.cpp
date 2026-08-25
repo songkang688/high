@@ -140,7 +140,14 @@ struct HighlightRemovalOp : Ort::CustomOpBase<HighlightRemovalOp, HighlightRemov
 }  // namespace
 
 // ORT 加载自定义算子库时调用的唯一入口（onnxruntime_c_api.h RegisterCustomOpsFn 约定）。
-extern "C" __attribute__((visibility("default"))) OrtStatus* ORT_API_CALL
+// Windows 侧导出由 src/high_removal_ops.def（EXPORTS RegisterCustomOps）声明，
+// 与 Linux 的 version script 对应；ELF 侧仍需显式 default visibility。
+#ifdef _WIN32
+#define HR_ORT_EXPORT
+#else
+#define HR_ORT_EXPORT __attribute__((visibility("default")))
+#endif
+extern "C" HR_ORT_EXPORT OrtStatus* ORT_API_CALL
 RegisterCustomOps(OrtSessionOptions* options, const OrtApiBase* apiBase) {
     const OrtApi* api = apiBase->GetApi(ORT_API_VERSION);
     if (api == nullptr) {
