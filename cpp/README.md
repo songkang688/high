@@ -86,6 +86,9 @@ cmake --build cpp\build --config Release --target high_removal_ops high_removal_
 :: 产物：cpp\build\Release\high_removal_ops.dll 与 high_removal_pyops.dll
 ```
 
+装的是更新版 Visual Studio（如 VS 2026）时，把 `-G "Visual Studio 17 2022"` 换成对应
+生成器或直接省略 `-G`（保留 `-A x64` 即可，CMake 会自选已装的 VS）。
+
 不用 vcpkg 时，也可用官方 OpenCV Windows 包 + 源码编译的 yaml-cpp：把
 `-DCMAKE_TOOLCHAIN_FILE/-DVCPKG_TARGET_TRIPLET` 换成
 `-DOpenCV_DIR=C:\opencv\build`（含 `OpenCVConfig.cmake` 的目录）与

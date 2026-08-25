@@ -31,12 +31,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      # vcpkg 二进制缓存：OpenCV 静态库冷构建约 20-30 分钟，命中缓存后只需几分钟。
-      - name: Cache vcpkg binary archives
-        uses: actions/cache@v4
+      # vcpkg 二进制缓存：OpenCV 静态库冷构建约 30 分钟，命中缓存后只需几分钟。
+      # 用 restore/save 拆开，保证即使后续步骤失败也保存已编译的二进制缓存。
+      - name: Restore vcpkg binary archives
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ~\AppData\Local\vcpkg\archives
-          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/workflows/windows-dll.yml') }}
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-opencv-yaml-v1
           restore-keys: |
             vcpkg-${{ env.VCPKG_TRIPLET }}-
 
@@ -47,6 +49,13 @@ jobs:
         run: |
           vcpkg install "opencv4[core,fs,thread,intrinsics,jpeg,png]" yaml-cpp --triplet $env:VCPKG_TRIPLET
 
+      - name: Save vcpkg binary archives
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-opencv-yaml-v1
+
       - name: Download ONNX Runtime win-x64
         shell: pwsh
         run: |
@@ -54,10 +63,12 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\ort.zip"
           Expand-Archive "$env:RUNNER_TEMP\ort.zip" -DestinationPath "$env:RUNNER_TEMP\ort"
 
-      - name: Configure (VS 2022, x64)
+      # 不写死 -G：runner 镜像的 VS 版本会更新（windows-latest 现为 VS 2026），
+      # 让 CMake 自选已装的 Visual Studio 生成器，-A x64 对任意 VS 生成器有效。
+      - name: Configure (Visual Studio, x64)
         shell: pwsh
         run: |
-          cmake -S cpp -B cpp/build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S cpp -B cpp/build -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET" `
             -DONNXRUNTIME_ROOT="$env:RUNNER_TEMP\ort\onnxruntime-win-x64-$($env:ORT_VERSION)" `
