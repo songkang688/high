@@ -541,10 +541,13 @@ _GRADIO_MAJOR = int(gr.__version__.split(".")[0])
 
 
 def _make_theme():
+    from gradio.themes.utils import fonts as _fonts
+
+    font_names = ["system-ui", "PingFang SC", "Microsoft YaHei", "sans-serif"]
     return gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
         neutral_hue=gr.themes.colors.zinc,
-        font=["system-ui", "PingFang SC", "Microsoft YaHei", "sans-serif"],
+        font=[_fonts.Font(n) for n in font_names],
     ).set(
         button_primary_background_fill="#1d4ed8",
         button_primary_background_fill_hover="#1e40af",

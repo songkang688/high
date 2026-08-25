@@ -45,6 +45,9 @@ python app_git_high2.py              # 仓库内则：python git-high2/app_git_h
 # 打开 http://127.0.0.1:7862
 ```
 
+> Linux 无桌面环境（服务器/容器）运行 Python 版时，MediaPipe 需要系统图形库：
+> `sudo apt install libegl1 libgl1 libglib2.0-0`（ONNX 版不需要）。
+
 前端三个页签：
 
 - **Python 版**：`highlight_removal.pipeline.process_image` 原始流水线
@@ -148,6 +151,18 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 
 模式：内嵌「常用模式」配置。需要其它模式可在仓库内用
 `onnx/make_facehi_onnx.py` 改 `mode` 重新生成。
+
+## 验证记录（本交付包实测）
+
+`lib/libfacehi_custom_ops.so` 按上文 Linux 步骤在 Ubuntu 24.04 x86-64 编译
+（OpenCV 4.14.0 静态 + IPP，`-ffp-contract=off -fno-fast-math`），实测：
+
+- 注入黄金关键点（`cpp/golden/1_landmarks.txt`）时，ONNX 输出与 Python 黄金结果
+  **max abs diff = 0，硬掩码 IoU = 1.0**（位级一致，与 `onnx/tests/onnx_report.md` 结论相同）。
+- 完整链路（内置 ONNX 人脸检测）对 `data/1.png`：MAE 0.0032、最大像素差 7/255、
+  差异像素占比 0.504%、PSNR 71.58 dB、硬掩码 IoU 0.9966——与基准报告逐位吻合，
+  差异仅来自两套推理引擎的亚像素关键点噪声。
+- 耗时（4 核 CPU）：Python 约 0.40 秒 / 张，ONNX 约 0.28 秒 / 张（1280×960）。
 
 ## 不改生产默认算法
 
