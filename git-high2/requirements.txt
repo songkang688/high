@@ -1,0 +1,11 @@
+# git-high2 运行依赖（版本放宽，以下组合已在 Python 3.12 验证可运行）
+# ONNX 版只需要：numpy + opencv + onnxruntime
+# Python 版（完整仓库内）额外需要：mediapipe + PyYAML + Pillow + scikit-image
+numpy>=1.24
+opencv-contrib-python>=4.8,<5
+onnxruntime>=1.18
+gradio>=4.0
+PyYAML>=6.0
+mediapipe>=0.10.8
+Pillow>=10.0
+scikit-image>=0.21
