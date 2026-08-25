@@ -21,12 +21,9 @@
   # 烘焙任一标准模式（常用模式 / 高保真模式 / 最高质量模式）
   python onnx/make_facehi_onnx.py --mode 常用模式 --out git-high2/models/facehi.onnx
 
-  # 强力版（三独立档位之一）：检测=灵敏 + 修复=强力 + method=混合 +
-  # process_scale=compromise（即现有常用模式），并在此之上加强修复/混合参数
+  # 独立档位预设（standard / strong / daily / detail，四档共用同一 C++ 内核）：
   python onnx/make_facehi_onnx.py --preset strong --out git-high2/models/facehi_strong.onnx
-
-  # 保护细节版（三独立档位之一）：检测=弱 + 修复=削弱 + method=混合 +
-  # 纹理优先键 + 保护区加宽（纹理/五官优先，去高光故意弱一点）
+  python onnx/make_facehi_onnx.py --preset daily  --out git-high2/models/facehi_daily.onnx
   python onnx/make_facehi_onnx.py --preset detail --out git-high2/models/facehi_detail.onnx
 """
 from __future__ import annotations
@@ -51,23 +48,29 @@ CONFIG_SECTIONS = ("face_detection", "regions", "highlight_detection",
                    "highlight_removal", "pipeline")
 
 # ---------------------------------------------------------------------------
-# 独立档位预设（每个预设 = 基准标准模式 + 可选的检测/修复预设 merge +
-# 少量差异项，烘焙为一个新 mode）。本文件当前实现强力版与保护细节版；
-# 日常版由其分支补充自己的 preset。
+# 独立档位预设（每个预设 = 基准标准模式 + 可选的检测/修复 YAML 预设 + 差异项，
+# 烘焙为一个新 mode）。四档共用同一 ai.facehi C++ kernel，不换算法内核。
+# 强度排序：strong ＞ standard（常用） ＞ daily ＞ detail。
 # ---------------------------------------------------------------------------
 
-# 强力版：基准就是现有「常用模式」（检测=灵敏、修复=强力、method=混合、
-# process_scale=compromise，当前默认里去高光最狠的档位），在其上加强
-# faithful_suppress / strong_inpaint 的混合参数（同一套
-# ai.facehi C++ kernel，不换算法内核）：
-#   - 关键杠杆 extreme_core_extra_l 10→0：混合模式的强修复（Telea inpaint）
-#     分支从「极亮核心」扩大到硬掩码内全部 L≥lab_l_threshold 的像素，
-#     高光被周围皮肤修复填充而不只是压亮度；
-#   - 亮度压制 / Poisson 混合 / 最终混合 alpha 拉满或接近拉满；
-#   - 纹理保留与边缘保护降低（细节保护最少）；
-#   - inpainting 半径 6→8（kernel 内 clamp 上限 9）；
-#   - 质量守卫上限相应放宽（守卫只发警告，不回退结果）。
 PRESETS: dict[str, dict] = {
+    # 标准版：即现有「常用模式」（检测=灵敏、修复=强力、method=混合、
+    # process_scale=compromise），等价于 --mode 常用模式。
+    "standard": {
+        "mode_name": "常用模式",
+        "base_mode": "常用模式",
+        "default_out": "facehi.onnx",
+        "overrides": {},
+        "doc": "标准版：烘焙常用模式（检测=灵敏、修复=强力、method=混合、process_scale=compromise）",
+    },
+    # 强力版：常用模式基础上加强 faithful_suppress / strong_inpaint 的混合参数：
+    #   - 关键杠杆 extreme_core_extra_l 10→0：混合模式的强修复（Telea inpaint）
+    #     分支从「极亮核心」扩大到硬掩码内全部 L≥lab_l_threshold 的像素，
+    #     高光被周围皮肤修复填充而不只是压亮度；
+    #   - 亮度压制 / Poisson 混合 / 最终混合 alpha 拉满或接近拉满；
+    #   - 纹理保留与边缘保护降低（细节保护最少）；
+    #   - inpainting 半径 6→8（kernel 内 clamp 上限 9）；
+    #   - 质量守卫上限相应放宽（守卫只发警告，不回退结果）。
     "strong": {
         "mode_name": "强力模式",
         "base_mode": "常用模式",
@@ -90,23 +93,69 @@ PRESETS: dict[str, dict] = {
         },
         "doc": "强力版：去高光最狠、细节保护最少（常用模式基础上加强修复与混合，强修复分支覆盖整个高光核心）",
     },
-    # 保护细节版：纹理/五官优先，去高光故意弱一点（弱于日常与强力）。
-    # 底座取「高保真模式」（compromise 尺度、检测/修复=正常），再 merge
-    # 检测=「弱」、修复=「削弱」两套仓库预设，其上叠加纹理优先键
-    #（参考 configs/experimental_better.yaml 思路，只用现有 C++ 内核支持的键）：
-    #   - method 改回「混合」且 extreme_core_extra_l 30：Telea 强修复只处理
-    #     近饱和白斑（弱检测下 198+30=228），其余油光走保真 Lab 压制，
-    #     避免 Telea 大面积平滑抹掉皮肤纹理；
-    #   - texture_preserve_strength 1.0：高频纹理回加拉满（内核 0.16×strength 封顶）；
-    #   - edge_protect_strength 0.60：纹理边界少动；
-    #   - 保护区加宽（protect_expand_radius 7、eye_protect_extra_radius 1.6）：
-    #     眼鼻嘴保护区更干净。
+    # 日常/平衡版：独立「日常模式」——高光检测与修复两段中每个数值键取
+    # 强力档（facehi_strong.onnx，mode=强力模式）与保护细节档
+    # （facehi_detail.onnx，mode=保护细节）两端实际烘焙值的中值
+    # （整数参数按 0.5 半进位取整，行尾注释为「强力 | 细节」端点值）；
+    # method 保持 混合，底座取高保真模式（process_scale=compromise）。
+    "daily": {
+        "mode_name": "日常模式",
+        "base_mode": "高保真模式",
+        "default_out": "facehi_daily.onnx",
+        "overrides": {
+            "highlight_detection": {
+                "rgb_brightness_threshold": 205,        # 192 | 218
+                "hsv_v_threshold": 190,                 # 178 | 202
+                "hsv_s_upper": 150,                     # 158 | 142
+                "lab_l_threshold": 188,                 # 178 | 198
+                "local_brightness_threshold": 6,        # 3 | 8（5.5 半进位）
+                "local_contrast_threshold": 0.026,      # 0.018 | 0.034
+                "saturation_pixel_threshold": 244,      # 240 | 248
+                "highlight_min_area": 10,               # 5 | 14（9.5 半进位）
+                "highlight_max_area_ratio": 0.1225,     # 0.155 | 0.09
+                "mask_dilate_radius": 1,                # 2 | 0
+                "mask_erode_radius": 1,                 # 0 | 1（0.5 半进位）
+                "mask_blur_radius": 9,                  # 8 | 10
+                "oil_shine_s_upper": 175,               # 188 | 162
+                "adaptive_region_delta": 5.1,           # 3.4 | 6.8
+                "adaptive_core_delta": 8.3,             # 5.8 | 10.8
+                "adaptive_grow_iterations": 12,         # 16 | 7（11.5 半进位）
+                "morph_close_radius": 3,                # 4 | 2
+                "soft_mask_gain": 1.635,                # 1.85 | 1.42
+                "forehead_region_max_fraction": 0.285,  # 0.35 | 0.22
+                "nose_tip_region_max_fraction": 0.55,   # 0.62 | 0.48
+                "cheek_region_max_fraction": 0.20,      # 0.26 | 0.14
+                "brow_region_max_fraction": 0.30,       # 0.32 | 0.28
+            },
+            "highlight_removal": {
+                "mode": "混合",                             # 两端同为 混合
+                "brightness_suppress_strength": 0.825,      # 0.97 | 0.68
+                "chroma_restore_strength": 0.30,            # 0.42 | 0.18
+                "texture_preserve_strength": 0.81,          # 0.62 | 1.0
+                "edge_protect_strength": 0.46,              # 0.32 | 0.60
+                "inpainting_radius": 5,                     # 7 | 3
+                "poisson_alpha_strength": 0.68,             # 0.88 | 0.48
+                "final_blend_alpha": 0.905,                 # 0.99 | 0.82
+                "max_allowed_modify_area_ratio": 0.165,     # 0.24 | 0.09
+                "max_allowed_mean_brightness_change": 18,   # 26 | 10
+                "max_allowed_local_color_delta": 13,        # 18 | 8
+                "faithful_luminance_floor": 0.675,          # 0.66 | 0.69
+                "extreme_core_extra_l": 19,                 # 8 | 30
+            },
+        },
+        "doc": "日常/平衡版：去高光够用且更收敛（强力档与保护细节档两端烘焙值的逐项中值，见 git-high2/models/DAILY.md）",
+    },
+    # 保护细节版：纹理优先，去高光故意弱一点，换五官/皮肤纹理尽量保留：
+    #   - 检测 ←「弱」预设、修复 ←「削弱」预设（configs/*.yaml）；
+    #   - method 改回 混合，Telea 强修复核心阈值抬到 lab_l_threshold+30
+    #     （只处理近饱和白斑），纹理回加拉满、边缘保护再抬一档；
+    #   - regions 保护区加宽（protect_expand_radius 5→7、眼部 1.0→1.6）。
     "detail": {
         "mode_name": "保护细节",
         "base_mode": "高保真模式",
         "default_out": "facehi_detail.onnx",
         "detection_preset": "弱",
-        "removal_preset": "削弱",
+        "intensity_preset": "削弱",
         "overrides": {
             "highlight_removal": {
                 "mode": "混合",
@@ -119,7 +168,7 @@ PRESETS: dict[str, dict] = {
                 "eye_protect_extra_radius": 1.6,
             },
         },
-        "doc": "保护细节版：纹理/五官优先、去高光故意弱一点（检测=弱、修复=削弱、混合法 Telea 阈值+30、纹理回加拉满、保护区加宽）",
+        "doc": "保护细节版：去高光最弱、纹理保留最多（弱检测 + 削弱混合修复，Telea 仅近饱和核心，保护区加宽）",
     },
 }
 
@@ -138,23 +187,24 @@ def build_modes_config() -> dict:
 def apply_preset(modes: dict, preset: dict) -> str:
     """基于基准模式生成预设档位配置，追加进 modes；返回新 mode 名。
 
-    可选字段 detection_preset / removal_preset：merge 仓库敏感度/强度预设
-    （configs/detection_sensitivity_presets.yaml / removal_intensity_presets.yaml，
-    与 cli_process._merge_preset 完全一致），随后再叠加 overrides。
+    可选 detection_preset / intensity_preset 先套用 configs/*.yaml 里的
+    检测敏感度 / 修复强度预设（与 cli_process._merge_preset 同口径），
+    再叠加 overrides 的逐段差异项。
     """
-    from cli_process import INTENSITY_PATH, SENSITIVITY_PATH, _merge_preset
-
     mode_name = preset["mode_name"]
     cfg = deepcopy(modes[preset["base_mode"]])
-    if preset.get("detection_preset"):
-        cfg["highlight_detection"] = _merge_preset(
-            cfg.get("highlight_detection", {}), SENSITIVITY_PATH,
-            preset["detection_preset"])
-    if preset.get("removal_preset"):
-        cfg["highlight_removal"] = _merge_preset(
-            cfg.get("highlight_removal", {}), INTENSITY_PATH,
-            preset["removal_preset"])
-    for section, values in preset["overrides"].items():
+    det_preset = preset.get("detection_preset")
+    inten_preset = preset.get("intensity_preset")
+    if det_preset or inten_preset:
+        from cli_process import INTENSITY_PATH, SENSITIVITY_PATH, _merge_preset
+
+        if det_preset:
+            cfg["highlight_detection"] = _merge_preset(
+                cfg.get("highlight_detection", {}), SENSITIVITY_PATH, det_preset)
+        if inten_preset:
+            cfg["highlight_removal"] = _merge_preset(
+                cfg.get("highlight_removal", {}), INTENSITY_PATH, inten_preset)
+    for section, values in preset.get("overrides", {}).items():
         cfg.setdefault(section, {}).update(values)
     modes[mode_name] = cfg
     return mode_name
@@ -176,7 +226,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     group.add_argument("--mode", choices=MODES, default=None,
                        help="烘焙的标准模式（默认：常用模式）")
     group.add_argument("--preset", choices=sorted(PRESETS), default=None,
-                       help="烘焙的独立档位预设（如 strong=强力版），与 --mode 互斥")
+                       help="烘焙的独立档位预设（standard / strong / daily / detail），与 --mode 互斥")
     parser.add_argument("--out", type=Path, default=None,
                         help="输出路径（默认 onnx/models/facehi.onnx；"
                              "--preset 时默认 onnx/models/<preset 对应文件名>）")
