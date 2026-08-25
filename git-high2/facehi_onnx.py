@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
-"""git-high2 傻瓜调用封装：facehi.onnx 单一模型 + 自定义算子库。
+"""git-high2 傻瓜调用封装：facehi*.onnx 单文件模型 + 自定义算子库。
 
 本目录（git-high2/）自包含运行 ONNX 版所需的一切：
-- models/facehi.onnx                唯一对外模型（内嵌子模型与配置，约 6.3MB）
+- models/facehi.onnx                默认模型（烘焙常用模式，内嵌子模型与配置，约 6.3MB）
+- models/facehi_strong.onnx         强力版（三独立档位之一：去高光最狠、细节保护最少）
 - lib/libfacehi_custom_ops.so       ORT 自定义算子库（必须注册，ORT 设计如此；
                                     未提供时可按 README.md / cpp/ 里的说明自行编译）
 
 最简用法::
 
     from facehi_onnx import remove_highlight
-    out_bgr = remove_highlight("photo.png")                # 返回 BGR ndarray
-    remove_highlight("photo.png", save_to="photo_out.png") # 直接落盘
+    out_bgr = remove_highlight("photo.png")                  # 默认模型，返回 BGR ndarray
+    remove_highlight("photo.png", save_to="photo_out.png")   # 直接落盘
+    remove_highlight("photo.png", variant="strong")          # 强力版（facehi_strong.onnx）
 
 底层等价于::
 
     import onnxruntime as ort
     so = ort.SessionOptions()
     so.register_custom_ops_library("lib/libfacehi_custom_ops.so")
-    sess = ort.InferenceSession("models/facehi.onnx", so)
+    sess = ort.InferenceSession("models/facehi_strong.onnx", so)   # 或 facehi.onnx
     result, mask = sess.run(None, {"image": bgr_uint8_hwc})
 """
 from __future__ import annotations
@@ -27,15 +29,34 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["FacehiOnnx", "remove_highlight", "find_model", "find_ops_lib"]
+__all__ = ["FacehiOnnx", "remove_highlight", "find_model", "find_ops_lib",
+           "MODEL_VARIANTS"]
 
 _HERE = Path(__file__).resolve().parent
 _LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib",
               "facehi_custom_ops.dll", "libfacehi_custom_ops.dll")
 
+# 档位别名 → 模型文件名。"default" 即 models/facehi.onnx（烘焙常用模式）；
+# "strong" 为强力版；日常版 / 保护细节版由各自分支补充。
+MODEL_VARIANTS = {
+    "default": "facehi.onnx",
+    "strong": "facehi_strong.onnx",
+}
 
-def find_model() -> Path | None:
-    """定位 facehi.onnx：环境变量 FACEHI_ONNX_MODEL 优先，其次 git-high2/models/。"""
+
+def find_model(variant: str | None = None) -> Path | None:
+    """定位模型文件。
+
+    variant 为空：环境变量 FACEHI_ONNX_MODEL 优先，其次 git-high2/models/facehi.onnx。
+    variant 非空：可以是 MODEL_VARIANTS 里的档位别名（如 "strong"），
+    也可以直接给文件名（如 "facehi_strong.onnx"），在 git-high2/models/ 下查找。
+    """
+    if variant:
+        name = MODEL_VARIANTS.get(variant, variant)
+        for cand in (_HERE / "models" / name, _HERE / name):
+            if cand.is_file():
+                return cand
+        return None
     env = os.environ.get("FACEHI_ONNX_MODEL")
     if env and Path(env).is_file():
         return Path(env)
@@ -83,17 +104,22 @@ def _read_bgr(image) -> np.ndarray:
 
 
 class FacehiOnnx:
-    """持有 facehi.onnx 会话；可复用以摊薄模型加载时间。"""
+    """持有 facehi*.onnx 会话；可复用以摊薄模型加载时间。
 
-    def __init__(self, model_path=None, ops_lib=None, intra_op_threads: int = 0):
+    model_path 直接给模型文件路径；或用 variant 按档位别名 / 文件名在
+    git-high2/models/ 下选择（如 variant="strong" → facehi_strong.onnx）。
+    """
+
+    def __init__(self, model_path=None, ops_lib=None, intra_op_threads: int = 0,
+                 variant: str | None = None):
         import onnxruntime as ort
 
-        model = Path(model_path) if model_path else find_model()
+        model = Path(model_path) if model_path else find_model(variant)
         lib = Path(ops_lib) if ops_lib else find_ops_lib()
         if model is None or not model.is_file():
             raise FileNotFoundError(
-                "找不到 facehi.onnx，请设置 FACEHI_ONNX_MODEL 或传入 model_path"
-                "（正常情况下应位于 git-high2/models/facehi.onnx）")
+                f"找不到模型（variant={variant or 'default'}），请设置 FACEHI_ONNX_MODEL "
+                "或传入 model_path（正常情况下应位于 git-high2/models/facehi*.onnx）")
         if lib is None or not lib.is_file():
             raise FileNotFoundError(
                 "找不到 libfacehi_custom_ops 自定义算子库，请设置 FACEHI_ORT_CUSTOM_OPS "
@@ -122,23 +148,24 @@ class FacehiOnnx:
         return result, mask
 
 
-_default_session: FacehiOnnx | None = None
+_sessions: dict[str, FacehiOnnx] = {}
 
 
 def remove_highlight(image, save_to=None, return_mask: bool = False,
-                     model_path=None, ops_lib=None):
+                     model_path=None, ops_lib=None, variant: str | None = None):
     """一行调用去高光。image 可以是图片路径或 uint8 BGR ndarray。
 
+    variant 选档位模型（如 "strong" → facehi_strong.onnx），会话按档位缓存复用。
     返回结果 BGR ndarray；return_mask=True 时返回 (result, highlight_mask)。
     save_to 提供时把结果 PNG/JPG 写盘（中文路径安全）。
     """
-    global _default_session
     if model_path or ops_lib:
-        sess = FacehiOnnx(model_path=model_path, ops_lib=ops_lib)
+        sess = FacehiOnnx(model_path=model_path, ops_lib=ops_lib, variant=variant)
     else:
-        if _default_session is None:
-            _default_session = FacehiOnnx()
-        sess = _default_session
+        key = variant or "default"
+        if key not in _sessions:
+            _sessions[key] = FacehiOnnx(variant=variant)
+        sess = _sessions[key]
     result, mask = sess.run(image)
     if save_to:
         import cv2
