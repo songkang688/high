@@ -1,0 +1,48 @@
+# 高光检测敏感度三套预设。正常套以 default.yaml 为准，此处只定义灵敏与弱的差异项。
+presets:
+  灵敏:
+    rgb_brightness_threshold: 192
+    hsv_v_threshold: 178
+    hsv_s_upper: 158
+    lab_l_threshold: 178
+    local_brightness_threshold: 3
+    local_contrast_threshold: 0.018
+    saturation_pixel_threshold: 240
+    highlight_min_area: 5
+    highlight_max_area_ratio: 0.155
+    mask_dilate_radius: 2
+    mask_erode_radius: 0
+    mask_blur_radius: 8
+    oil_shine_s_upper: 188
+    adaptive_region_delta: 3.4
+    adaptive_core_delta: 5.8
+    adaptive_grow_iterations: 16
+    morph_close_radius: 4
+    soft_mask_gain: 1.85
+    forehead_region_max_fraction: 0.35
+    nose_tip_region_max_fraction: 0.62
+    cheek_region_max_fraction: 0.26
+    brow_region_max_fraction: 0.32
+
+  弱:
+    rgb_brightness_threshold: 218
+    hsv_v_threshold: 202
+    hsv_s_upper: 142
+    lab_l_threshold: 198
+    local_brightness_threshold: 8
+    local_contrast_threshold: 0.034
+    saturation_pixel_threshold: 248
+    highlight_min_area: 14
+    highlight_max_area_ratio: 0.090
+    mask_dilate_radius: 0
+    mask_erode_radius: 1
+    mask_blur_radius: 10
+    oil_shine_s_upper: 162
+    adaptive_region_delta: 6.8
+    adaptive_core_delta: 10.8
+    adaptive_grow_iterations: 7
+    morph_close_radius: 2
+    soft_mask_gain: 1.42
+    forehead_region_max_fraction: 0.22
+    nose_tip_region_max_fraction: 0.48
+    cheek_region_max_fraction: 0.14

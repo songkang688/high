@@ -1,0 +1,27 @@
+# 去高光强度三套预设。正常套以 default.yaml 为准，此处只定义强力与削弱的差异项。
+presets:
+  强力:
+    mode: 混合
+    brightness_suppress_strength: 0.94
+    chroma_restore_strength: 0.38
+    texture_preserve_strength: 0.70
+    edge_protect_strength: 0.38
+    inpainting_radius: 6
+    poisson_alpha_strength: 0.82
+    final_blend_alpha: 0.97
+    max_allowed_modify_area_ratio: 0.20
+    max_allowed_mean_brightness_change: 22
+    max_allowed_local_color_delta: 15
+
+  削弱:
+    mode: 保真
+    brightness_suppress_strength: 0.68
+    chroma_restore_strength: 0.18
+    texture_preserve_strength: 0.88
+    edge_protect_strength: 0.55
+    inpainting_radius: 3
+    poisson_alpha_strength: 0.48
+    final_blend_alpha: 0.82
+    max_allowed_modify_area_ratio: 0.09
+    max_allowed_mean_brightness_change: 10
+    max_allowed_local_color_delta: 8

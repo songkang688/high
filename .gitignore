@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Large / local only
+dist/
+demo_outputs/
+runtime_outputs/
+*.log
+models/lbfmodel.yaml
+models/*.onnx
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+_github_upload/
