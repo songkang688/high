@@ -9,7 +9,8 @@
 | 路径 | 说明 |
 |------|------|
 | `highlight_removal/` | 核心算法：检测、划区域、去高光、质量检查 |
-| `app.py` | Gradio 网页版 |
+| `app_studio.py` | **推荐 UI**：Python / ONNX 引擎切换与并排对比工作室 |
+| `app.py` | Gradio 网页版（全参数调试台） |
 | `app_simple.py` | PyQt5 桌面简化版 |
 | `cli_process.py` + `run_facehi_terminal.bat` | 命令行入口 |
 | `configs/` | 默认参数与预设 |
@@ -30,6 +31,19 @@ python app.py
 ```
 
 浏览器打开：http://127.0.0.1:7860
+
+### 工作室页（推荐 UI）：Python / ONNX 切换与对比
+
+```bash
+python app_studio.py
+```
+
+浏览器打开：http://127.0.0.1:7861。三种模式：**Python**（原始链路）、**ONNX**
+（`models/high_removal.onnx` + `libhigh_removal_ops.so`）、**对比**（同图双引擎并排 +
+差异热力图 + MAE / PSNR / 掩码 IoU / 耗时）。ONNX 与对比模式需要先按
+[`cpp/README.md`](cpp/README.md) 编译 `libhigh_removal_ops.so`（也可用环境变量
+`HIGH_OPS_LIB` 指定 .so 路径）；缺失时页面会给出构建提示，Python 模式不受影响。
+监听地址 / 端口可用 `HIGH_STUDIO_HOST`（默认 127.0.0.1）、`HIGH_STUDIO_PORT`（默认 7861）覆盖。
 
 桌面版：
 
