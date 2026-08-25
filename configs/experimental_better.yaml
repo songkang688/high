@@ -1,0 +1,28 @@
+# 实验性「纹理优先」去高光组合（2026-08 检测审计的实验产物，默认不启用）。
+#
+# 与「常用模式」相比（17 张 data/ 样本、同一关键点 A/B）：
+#   - 油光候选区残留 dL：11.38 → ≈12.0（基本持平，略弱）
+#   - 油光区纹理保留（Laplacian 方差比）：0.117 → ≈0.190（+63%，磨皮感显著降低）
+#   - 修改区平均 |Δa|/|Δb|：1.40/2.32 → ≈1.11/1.76（色偏 -20%~-25%，更不发灰）
+#   - treatable 区 SSIM：0.961 → ≈0.970；保护区/背景零触碰不变
+# 结论：不是全面更好——重油光的额头核心会比默认略多一点残留；
+# 在「自然感/纹理优先」场景（轻中度油光、要求皮肤质感）建议启用。
+#
+# 用法：把本文件的 highlight_removal 三个键叠加到常用模式配置上，例如：
+#   cfg = load_cli_config("常用模式")
+#   cfg["highlight_removal"].update(load_yaml("configs/experimental_better.yaml")["highlight_removal"])
+# 或直接运行 experiments/run_better.py -i 图片 -o 输出。
+#
+# 注意：不修改 configs/default.yaml 的任何默认值；
+# 三个键全部有默认值兜底（30→10、0.35→0.16、true→false 即回到产线行为）。
+
+highlight_removal:
+  # 混合模式里 extreme Telea 强修复核心的触发阈值抬高到 lab_l_threshold+30
+  #（灵敏配置下 178+30=208，只处理近饱和白斑），其余油光走保真 Lab 压制，
+  # 减少 Telea 大面积平滑带来的塑料感。
+  extreme_core_extra_l: 30
+  # 保真压制时从原图回加的高频纹理系数（产线硬编码 0.16 → 0.35）。
+  texture_keep_factor: 0.35
+  # 皮肤亮度基线排除油光核心（masked Gaussian），
+  # 防止大片油光把自身基线抬高、压制 floor 绑死。
+  faithful_baseline_exclude_shine: true
