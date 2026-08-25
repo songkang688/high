@@ -19,6 +19,8 @@ models/*.onnx
 !models/high_removal.onnx
 # 「强力」变体（configs/onnx_strong.yaml 内嵌，见 tools/metrics_strong.md），纳入版本管理
 !models/high_removal_strong.onnx
+# 日常版交付模型（内嵌 configs/onnx_daily.yaml，见 tools/metrics_daily.py），纳入版本管理
+!models/high_removal_daily.onnx
 
 # OS / IDE
 .DS_Store
