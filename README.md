@@ -31,6 +31,14 @@ python app.py
 
 浏览器打开：http://127.0.0.1:7860
 
+Python / ONNX 对比工作台（需 `pip install onnxruntime` 并按 `cpp/README.md` 编译 `libhigh_removal_ops.so`）：
+
+```bash
+python app_compare.py
+```
+
+浏览器打开：http://127.0.0.1:7861
+
 桌面版：
 
 ```bash
