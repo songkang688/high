@@ -211,7 +211,9 @@ Section scaledHighlightParams(const Section& params, double scale) {
         const long long scaled = pyRound(base * scale);
         long long floorV = 0;
         const std::string k(key);
-        if (k == "morph_close_radius" || k == "mask_dilate_radius") floorV = 1;
+        // 与 Python highlight_removal/utils.py 一致：下限只对显式启用（base > 0）的
+        // 形态学半径生效，显式的 0（如保护细节档 mask_dilate_radius: 0）保持 0。
+        if (base > 0 && (k == "morph_close_radius" || k == "mask_dilate_radius" || k == "mask_erode_radius")) floorV = 1;
         if (k == "mask_blur_radius") floorV = (scale <= 0.26) ? 3 : 0;
         out[key] = static_cast<double>(std::max(floorV, scaled));
     }

@@ -626,7 +626,10 @@ def scaled_highlight_params(params: Dict[str, Any], scale: float) -> Dict[str, A
         if key in out:
             base = float(out[key])
             scaled = int(round(base * scale))
-            floor = 1 if key in ("morph_close_radius", "mask_dilate_radius") else 0
+            # 下限只对显式启用（base > 0）的形态学半径生效：既保证低分辨率下
+            # 请求的膨胀/腐蚀/闭合不会被四舍五入成 0，也不会把显式的 0
+            # （如保护细节档 mask_dilate_radius: 0）强制抬成 1。
+            floor = 1 if base > 0 and key in ("morph_close_radius", "mask_dilate_radius", "mask_erode_radius") else 0
             if key == "mask_blur_radius":
                 floor = 3 if scale <= 0.26 else 0
             out[key] = max(floor, scaled)
