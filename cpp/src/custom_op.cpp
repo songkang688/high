@@ -168,7 +168,16 @@ struct HighlightRemovalOp
 }  // namespace
 
 // ORT 官方共享库约定：导出 RegisterCustomOps(OrtSessionOptions*, const OrtApiBase*)。
-extern "C" __attribute__((visibility("default"))) OrtStatus* ORT_API_CALL
+// Windows（MSVC / MinGW）必须用 __declspec(dllexport)（ELF 的 visibility 属性对
+// PE 无效）；此外 CMakeLists 还挂了 src/facehi_custom_ops.def 双保险，
+// 保证导出名恒为无修饰的 "RegisterCustomOps"。
+#if defined(_WIN32)
+#define FACEHI_EXPORT __declspec(dllexport)
+#else
+#define FACEHI_EXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" FACEHI_EXPORT OrtStatus* ORT_API_CALL
 RegisterCustomOps(OrtSessionOptions* options, const OrtApiBase* api_base) {
   Ort::InitApi(api_base->GetApi(ORT_API_VERSION));
   static const HighlightRemovalOp op;

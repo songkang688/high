@@ -32,8 +32,11 @@ git-high2/
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
 ├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
 ├── requirements.txt          # 运行依赖（版本放宽）
-├── lib/                      # 自定义算子库 libfacehi_custom_ops.so（Linux x86-64）
+├── lib/                      # 自定义算子库：libfacehi_custom_ops.so（Linux x86-64）
+│                             #             + facehi_custom_ops.dll（Windows x64）
+├── bench/                    # 三引擎平均用时基准（BENCH_REPORT.md + 脚本 + 原始 csv）
 └── cpp/                      # 编译自定义算子库所需的精简源码 + CMakeLists
+                              #（含 cmake/mingw-w64-x86_64.cmake 交叉编译 toolchain）
 ```
 
 ## 快速开始
@@ -117,7 +120,46 @@ cmake --build git-high2/cpp/build -j
 cp git-high2/cpp/build/libfacehi_custom_ops.so git-high2/lib/
 ```
 
-### Windows：编译 `.dll`
+### Windows：已提供 x64 DLL，开箱即用
+
+`lib/facehi_custom_ops.dll`（**x86-64，已随仓库提供**）在 Linux 上用
+mingw-w64（GCC 13，POSIX 线程模型）交叉编译：静态链入 OpenCV 4.14.0 与
+yaml-cpp 0.8.0，`-O2 -ffp-contract=off -fno-fast-math` 与 Linux so 相同，
+除 Windows 系统库（KERNEL32/msvcrt/ole32）外零运行时依赖，无需装
+Visual C++ 运行库或 MinGW。唯一导出符号 `RegisterCustomOps`，可被官方
+`onnxruntime` win-x64 包（建议 1.22–1.29）的
+`SessionOptions.register_custom_ops_library` 直接加载。
+
+使用：把整个 `git-high2` 目录复制到 `%USERPROFILE%\git-high2`
+（见文件开头 PowerShell 命令）即可——`facehi_onnx.py` 与前端会自动在
+`lib\` 下找到 dll，无需任何配置。若只想单独放置，也可设环境变量
+`FACEHI_ORT_CUSTOM_OPS` 指向 dll 的完整路径。
+
+> 数值说明：MinGW 无法链接 Intel IPP（ippicv 只发行 MSVC 版），故 Windows
+> DLL 的 OpenCV 为 `WITH_IPP=OFF`。与开 IPP 的 Linux so 相比，个别 OpenCV
+> 原语可能有 ±1/255 级别的舍入差；该量级远小于两套人脸推理引擎间的
+> 固有差异（见下方验证记录），不影响使用。
+
+#### 在 Linux 上重新交叉编译 dll（本仓库产物的生成方式）
+
+```bash
+sudo apt install mingw-w64 cmake
+# 1) 用同一 toolchain 静态编 OpenCV 4.14.0（WITH_IPP=OFF、WITH_PROTOBUF=OFF、
+#    WITH_ADE=OFF，BUILD_LIST 同 Linux）与 yaml-cpp 0.8.0，
+#    分别装到 /opt/xwin/opencv-mingw、/opt/xwin/yamlcpp-mingw；
+#    ORT 只需 onnxruntime-win-x64-*.zip 解压出的 include/（不链接 libonnxruntime）。
+# 2) 一条命令编 dll：
+export MINGW_FIND_ROOTS=/opt/xwin/opencv-mingw:/opt/xwin/yamlcpp-mingw
+cmake -B git-high2/cpp/build-win -S git-high2/cpp -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake \
+      -DOpenCV_DIR=/opt/xwin/opencv-mingw/lib/cmake/opencv4 \
+      -DORT_ROOT=/opt/xwin/ort-win/onnxruntime-win-x64-1.29.0 \
+  && cmake --build git-high2/cpp/build-win -j
+x86_64-w64-mingw32-strip --strip-unneeded git-high2/cpp/build-win/facehi_custom_ops.dll
+cp git-high2/cpp/build-win/facehi_custom_ops.dll git-high2/lib/
+```
+
+#### 在 Windows 上用 Visual Studio / vcpkg 重编（可选）
 
 1. 安装 Visual Studio 2022（含「使用 C++ 的桌面开发」）与 CMake。
 2. 下载 ONNX Runtime Windows 预编译包并解压（如 `C:\ort`）：
@@ -138,7 +180,8 @@ cmake --build git-high2\cpp\build --config Release
 copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 ```
 
-产物 `facehi_custom_ops.dll` 放进 `lib/` 后，`facehi_onnx.py` 与前端会自动找到。
+产物 `facehi_custom_ops.dll` 放进 `lib/` 后，`facehi_onnx.py` 与前端会自动找到
+（`libfacehi_custom_ops.dll` 命名也能识别）。
 
 ## 模型接口
 
@@ -162,7 +205,15 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 - 完整链路（内置 ONNX 人脸检测）对 `data/1.png`：MAE 0.0032、最大像素差 7/255、
   差异像素占比 0.504%、PSNR 71.58 dB、硬掩码 IoU 0.9966——与基准报告逐位吻合，
   差异仅来自两套推理引擎的亚像素关键点噪声。
-- 耗时（4 核 CPU）：Python 约 0.40 秒 / 张，ONNX 约 0.28 秒 / 张（1280×960）。
+- 耗时（4 核 CPU，`data/` 全部 17 张，详见 `bench/BENCH_REPORT.md`）：
+  Python 热平均 0.285 秒 / 张，ONNX 热平均 0.223 秒 / 张（快约 21.7%），
+  冷启动 ONNX 0.54 秒 vs Python 1.36 秒。
+
+`lib/facehi_custom_ops.dll`（Windows x64）按上文 mingw-w64 交叉编译步骤构建，
+已验证：`file` 显示 PE32+ DLL (x86-64)；`x86_64-w64-mingw32-objdump -p`
+导出表唯一符号 `RegisterCustomOps`；导入表仅 Windows 系统库
+（KERNEL32/msvcrt/ole32）。本云环境无 Windows，未跑过 Windows 上的
+`session.Run`；推理数值对拍以 Linux so 为准。
 
 ## 不改生产默认算法
 

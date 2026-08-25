@@ -1,0 +1,5 @@
+; Windows 导出表双保险：与 custom_op.cpp 中的 __declspec(dllexport) 一致，
+; 确保 onnxruntime SessionOptions.register_custom_ops_library 能按名字
+; 找到无修饰的 RegisterCustomOps（x64 上 ORT_API_CALL/stdcall 无名字修饰）。
+EXPORTS
+    RegisterCustomOps
