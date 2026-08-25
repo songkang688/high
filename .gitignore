@@ -17,6 +17,8 @@ models/*.onnx
 !models/face_landmarks_detector.onnx
 # 单文件交付模型（见 tools/export_high_removal_onnx.py），用户直接调用的最终产物，纳入版本管理
 !models/high_removal.onnx
+# 日常版交付模型（内嵌 configs/onnx_daily.yaml，见 tools/metrics_daily.py），纳入版本管理
+!models/high_removal_daily.onnx
 
 # OS / IDE
 .DS_Store
