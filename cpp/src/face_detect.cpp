@@ -132,6 +132,16 @@ std::vector<float> image_to_tensor(const cv::Mat& image_bgr, double cx, double c
   return tensor;
 }
 
+// Windows 的 ORTCHAR_T 是 wchar_t：UTF-8 路径需转宽字符（中文路径安全）；
+// 其余平台直接透传。仅文件路径构造用到（自定义算子走内存缓冲构造）。
+#ifdef _WIN32
+std::wstring to_ort_path(const std::string& utf8) {
+  return std::filesystem::u8path(utf8).wstring();
+}
+#else
+const std::string& to_ort_path(const std::string& utf8) { return utf8; }
+#endif
+
 }  // namespace
 
 struct OnnxFaceLandmarker::Impl {
@@ -151,8 +161,10 @@ OnnxFaceLandmarker::OnnxFaceLandmarker(const std::string& detector_path,
                                        double min_presence_confidence, int num_faces)
     : impl_(std::make_unique<Impl>()) {
   impl_->so.SetIntraOpNumThreads(1);
-  impl_->det = std::make_unique<Ort::Session>(impl_->env, detector_path.c_str(), impl_->so);
-  impl_->lmk = std::make_unique<Ort::Session>(impl_->env, landmark_path.c_str(), impl_->so);
+  impl_->det = std::make_unique<Ort::Session>(impl_->env, to_ort_path(detector_path).c_str(),
+                                              impl_->so);
+  impl_->lmk = std::make_unique<Ort::Session>(impl_->env, to_ort_path(landmark_path).c_str(),
+                                              impl_->so);
   impl_->min_det = min_detection_confidence;
   impl_->min_presence = min_presence_confidence;
   impl_->num_faces = num_faces;

@@ -30,6 +30,9 @@ endif()
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs photo objdetect)
 find_package(yaml-cpp REQUIRED)
+# 交叉编译时 yaml-cpp 头文件不在默认 include 路径（Linux 上 /usr/include 侥幸命中），
+# 显式找到 yaml-cpp/yaml.h 所在目录。
+find_path(YAML_CPP_INCLUDE_DIR yaml-cpp/yaml.h)
 
 set(ORT_ROOT "" CACHE PATH "ONNX Runtime 解压目录（含 include/ 与 lib/）")
 if(NOT ORT_ROOT)
@@ -55,6 +58,14 @@ target_include_directories(facehi_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${ORT_ROOT}/include
 )
+if(YAML_CPP_INCLUDE_DIR)
+  target_include_directories(facehi_core PUBLIC ${YAML_CPP_INCLUDE_DIR})
+endif()
+if(WIN32)
+  # 静态链 yaml-cpp 时必须定义，否则头文件按 __declspec(dllimport) 生成
+  # __imp_ 前缀符号导致链接失败。
+  target_compile_definitions(facehi_core PUBLIC YAML_CPP_STATIC_DEFINE)
+endif()
 # ORT_API_MANUAL_INIT：facehi_core 不直接依赖 libonnxruntime 符号。
 # - 独立可执行文件（facehi_cpp）自行链接 onnxruntime 并在 main 里 Ort::InitApi()；
 # - 自定义算子库（facehi_custom_ops）不链接 onnxruntime，在 RegisterCustomOps
