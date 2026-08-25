@@ -21,6 +21,8 @@ models/*.onnx
 !models/high_removal_strong.onnx
 # 日常版交付模型（内嵌 configs/onnx_daily.yaml，见 tools/metrics_daily.py），纳入版本管理
 !models/high_removal_daily.onnx
+# 保护细节变体（内嵌 configs/onnx_detail.yaml，见 tools/metrics_detail.md）
+!models/high_removal_detail.onnx
 
 # OS / IDE
 .DS_Store
