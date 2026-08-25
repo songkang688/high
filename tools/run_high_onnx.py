@@ -2,19 +2,19 @@
 
 只需要三样东西：
   1. models/high_removal.onnx        —— 单文件模型（内嵌两个人脸网络 + default.yaml 配置）
-  2. 自定义算子内核 .so（cpp/ 构建产物，作用等同于 onnxruntime 本体）：
-       - libhigh_removal_pyops.so（--kernel exact，默认）：session.run 在本进程内调用
-         原始 Python 流水线本体，输出与 highlight_removal.pipeline.process_image
-         **逐位相同**；要求本仓库可导入（.so 会按自身位置自动定位仓库根，或设
-         HIGH_PY_KERNEL_PATH）且已安装 mediapipe；
-       - libhigh_removal_ops.so（--kernel cpp）：完整 C++ 移植，无 Python/MediaPipe
-         依赖，存在亚像素级浮点尾差（实测见 tools/PARITY_RESULTS.md）。
+  2. 自定义算子内核库（cpp/ 构建产物，Linux 为 .so、Windows 为 .dll，作用等同于 onnxruntime 本体）：
+       - libhigh_removal_pyops.so / high_removal_pyops.dll（--kernel exact，默认）：
+         session.run 在本进程内调用原始 Python 流水线本体，输出与
+         highlight_removal.pipeline.process_image **逐位相同**；要求本仓库可导入
+         （库会按自身位置自动定位仓库根，或设 HIGH_PY_KERNEL_PATH）且已安装 mediapipe；
+       - libhigh_removal_ops.so / high_removal_ops.dll（--kernel cpp）：完整 C++ 移植，
+         无 Python/MediaPipe 依赖，存在亚像素级浮点尾差（实测见 tools/PARITY_RESULTS.md）。
   3. pip install onnxruntime opencv-python
 
 核心调用就是这几行（两个内核共用同一个 onnx 文件）：
 
     so = ort.SessionOptions()
-    so.register_custom_ops_library("libhigh_removal_pyops.so")   # 或 libhigh_removal_ops.so
+    so.register_custom_ops_library("libhigh_removal_pyops.so")   # Windows: high_removal_pyops.dll
     sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
     result = sess.run(["result"], {"image": bgr_uint8_hwc})[0]
 
@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import argparse
+import platform
 from pathlib import Path
 
 import cv2
@@ -33,10 +34,31 @@ import numpy as np
 import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parents[1]
-KERNEL_LIBS = {
-    "exact": ROOT / "cpp" / "build" / "libhigh_removal_pyops.so",
-    "cpp": ROOT / "cpp" / "build" / "libhigh_removal_ops.so",
+_WINDOWS = platform.system() == "Windows"
+KERNEL_FILES = {
+    "exact": "high_removal_pyops.dll" if _WINDOWS else "libhigh_removal_pyops.so",
+    "cpp": "high_removal_ops.dll" if _WINDOWS else "libhigh_removal_ops.so",
 }
+# 查找顺序：cpp/build（Linux make / 手动放置）→ cpp/build/Release（Windows VS 多配置构建）
+# → cpp/build/windows（仓库内预编译 DLL，由 .github/workflows/windows-dll.yml 产出）。
+KERNEL_SEARCH_DIRS = [
+    ROOT / "cpp" / "build",
+    ROOT / "cpp" / "build" / "Release",
+    ROOT / "cpp" / "build" / "windows",
+]
+
+
+def find_kernel_lib(kernel: str) -> Path:
+    """按平台文件名在候选构建目录中查找内核库；找不到时返回默认路径用于报错提示。"""
+    name = KERNEL_FILES[kernel]
+    for directory in KERNEL_SEARCH_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return KERNEL_SEARCH_DIRS[0] / name
+
+
+KERNEL_LIBS = {kernel: find_kernel_lib(kernel) for kernel in KERNEL_FILES}
 
 
 def create_session(model_path: str | Path, ops_library: str | Path) -> ort.InferenceSession:
@@ -66,7 +88,8 @@ def main() -> int:
 
     ops = Path(args.ops) if args.ops else KERNEL_LIBS[args.kernel]
     if not ops.is_file():
-        raise SystemExit(f"[错误] 找不到自定义算子库 {ops}，请先按 cpp/README.md 构建")
+        searched = "、".join(str(d / KERNEL_FILES[args.kernel]) for d in KERNEL_SEARCH_DIRS)
+        raise SystemExit(f"[错误] 找不到自定义算子库（已查找：{searched}），请先按 cpp/README.md 构建")
     image = cv2.imread(args.input, cv2.IMREAD_COLOR)
     if image is None:
         raise SystemExit(f"[错误] 图片读取失败: {args.input}")

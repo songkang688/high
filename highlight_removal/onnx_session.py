@@ -2,10 +2,12 @@
 
 同一个 ONNX 文件支持两个可互换的内核库（图不需要任何改动，注册哪个库就用哪个内核）：
 
-  - 精确内核 libhigh_removal_pyops.so（默认）：Compute 时在宿主进程内调用原始
-    Python 流水线（highlight_removal.exact_kernel → process_image，MediaPipe +
-    pip OpenCV 本体），session.run 输出与直接调用 process_image **逐位相同**；
-  - C++ 快速内核 libhigh_removal_ops.so：完整 C++ 移植（ORT 关键点 + OpenCV C++），
+  - 精确内核 libhigh_removal_pyops.so（Windows：high_removal_pyops.dll，默认）：
+    Compute 时在宿主进程内调用原始 Python 流水线（highlight_removal.exact_kernel →
+    process_image，MediaPipe + pip OpenCV 本体），session.run 输出与直接调用
+    process_image **逐位相同**；
+  - C++ 快速内核 libhigh_removal_ops.so（Windows：high_removal_ops.dll）：
+    完整 C++ 移植（ORT 关键点 + OpenCV C++），
     不依赖 Python/MediaPipe，可被纯 C++ 宿主加载，但与 Python 存在亚像素级浮点尾差
     （实测见 tools/PARITY_RESULTS.md）。
 
@@ -20,6 +22,7 @@ InferenceSession 与 uint8 HWC BGR 输入/输出的推理封装。
 from __future__ import annotations
 
 import os
+import platform
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -28,8 +31,32 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_PATH = ROOT / "models" / "high_removal.onnx"
-EXACT_OPS_PATH = ROOT / "cpp" / "build" / "libhigh_removal_pyops.so"
-CPP_OPS_PATH = ROOT / "cpp" / "build" / "libhigh_removal_ops.so"
+_WINDOWS = platform.system() == "Windows"
+_KERNEL_FILES = {
+    "exact": "high_removal_pyops.dll" if _WINDOWS else "libhigh_removal_pyops.so",
+    "cpp": "high_removal_ops.dll" if _WINDOWS else "libhigh_removal_ops.so",
+}
+# 查找顺序：cpp/build（Linux make / 手动放置）→ cpp/build/Release（Windows VS 多配置构建）
+# → cpp/build/windows（仓库内预编译 DLL，由 .github/workflows/windows-dll.yml 产出）。
+_KERNEL_SEARCH_DIRS = [
+    ROOT / "cpp" / "build",
+    ROOT / "cpp" / "build" / "Release",
+    ROOT / "cpp" / "build" / "windows",
+]
+
+
+def _find_kernel_lib(kernel: str) -> Path:
+    """按平台文件名在候选构建目录中查找内核库；找不到时返回默认路径用于报错提示。"""
+    name = _KERNEL_FILES[kernel]
+    for directory in _KERNEL_SEARCH_DIRS:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return _KERNEL_SEARCH_DIRS[0] / name
+
+
+EXACT_OPS_PATH = _find_kernel_lib("exact")
+CPP_OPS_PATH = _find_kernel_lib("cpp")
 OPS_ENV_VAR = "HIGH_OPS_LIB"
 KERNEL_ENV_VAR = "HIGH_ONNX_KERNEL"
 KERNEL_EXACT = "exact"

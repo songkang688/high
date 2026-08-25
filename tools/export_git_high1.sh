@@ -36,6 +36,12 @@ cp "$REPO/tools/run_high_onnx.py" "$DEST/tools/run_high_onnx.py"
 cp "$REPO/models/high_removal.onnx" "$REPO/models/face_landmarker.task" "$DEST/models/"
 cp "$REPO/configs/"*.yaml "$DEST/configs/"
 cp "$EXACT_SO" "$CPP_SO" "$DEST/cpp/build/"
+# Windows 预编译 DLL（.github/workflows/windows-dll.yml 产物，提交在 cpp/build/windows/）：
+# 存在时一并打包，便携包在 Windows 上即插即用（run_high_onnx.py 会自动按平台选 .so/.dll）。
+if compgen -G "$REPO/cpp/build/windows/*.dll" > /dev/null; then
+    mkdir -p "$DEST/cpp/build/windows"
+    cp "$REPO/cpp/build/windows/"*.dll "$DEST/cpp/build/windows/"
+fi
 cp "$REPO/data/"*.png "$DEST/data/"
 rm -rf "$DEST/highlight_removal"
 cp -r "$REPO/highlight_removal" "$DEST/highlight_removal"
