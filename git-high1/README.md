@@ -28,8 +28,14 @@ git-high1/
   highlight_removal/       # Python 包（精确内核经它调用原始流水线 process_image）
   cpp/build/libhigh_removal_pyops.so  # 精确内核（效果最好：与 Python 逐位一致）
   cpp/build/libhigh_removal_ops.so    # C++ 快速内核（无 Python/MediaPipe 依赖）
+  cpp/build/windows/high_removal_pyops.dll  # 精确内核 Windows 版（存在时；来自 windows-dll workflow）
+  cpp/build/windows/high_removal_ops.dll    # C++ 快速内核 Windows 版（OpenCV/yaml-cpp 已静态链接）
   data/                    # 17 张示例图（前端下拉框直接可选）
 ```
+
+Windows 上无需改代码：`tools/run_high_onnx.py` 与 `highlight_removal/onnx_session.py`
+会按平台自动选 `.so`（Linux）或 `.dll`（Windows，搜索 `cpp/build/`、`cpp/build/Release/`、
+`cpp/build/windows/`）。
 
 ## 依赖
 
@@ -69,6 +75,8 @@ import onnxruntime as ort
 
 so = ort.SessionOptions()
 so.register_custom_ops_library("cpp/build/libhigh_removal_pyops.so")  # 或 libhigh_removal_ops.so
+# Windows 用 DLL：
+# so.register_custom_ops_library("cpp/build/windows/high_removal_pyops.dll")  # 或 high_removal_ops.dll
 sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
 result, hard_mask = sess.run(["result", "hard_mask"], {"image": cv2.imread("data/1.png")})
 ```
@@ -81,10 +89,10 @@ result, hard_mask = sess.run(["result", "hard_mask"], {"image": cv2.imread("data
 同一个 `high_removal.onnx` 支持两个可互换的内核库——注册哪个 `.so` 就用哪个内核，
 模型文件不需要任何改动：
 
-| 内核 | 库文件 | 效果 | 依赖 |
+| 内核 | 库文件（Linux / Windows） | 效果 | 依赖 |
 |------|--------|------|------|
-| **精确内核（默认，效果最好）** | `libhigh_removal_pyops.so` | 与 Python 流水线 `process_image` **逐位相同**（17/17 张 `np.array_equal`，MAE 恒为 0） | 宿主必须是 Python 进程；需要本目录的 `highlight_removal/` 包、`models/face_landmarker.task` 与 mediapipe |
-| C++ 快速内核 | `libhigh_removal_ops.so` | 完整 C++ 移植，存在亚像素级浮点尾差（17 张实测平均 MAE ≈ 0.003/255，PSNR ≈ 72 dB，掩码 IoU ≈ 0.9996） | 无 Python/MediaPipe 依赖，可被纯 C++ ORT 宿主加载；运行期需系统 OpenCV 与 yaml-cpp 运行库 |
+| **精确内核（默认，效果最好）** | `libhigh_removal_pyops.so` / `high_removal_pyops.dll` | 与 Python 流水线 `process_image` **逐位相同**（17/17 张 `np.array_equal`，MAE 恒为 0） | 宿主必须是 Python 进程（≥ 3.10）；需要本目录的 `highlight_removal/` 包、`models/face_landmarker.task` 与 mediapipe |
+| C++ 快速内核 | `libhigh_removal_ops.so` / `high_removal_ops.dll` | 完整 C++ 移植，存在亚像素级浮点尾差（17 张实测平均 MAE ≈ 0.003/255，PSNR ≈ 72 dB，掩码 IoU ≈ 0.9996） | 无 Python/MediaPipe 依赖，可被纯 C++ ORT 宿主加载；Linux 运行期需系统 OpenCV 与 yaml-cpp 运行库，Windows DLL 已静态链接二者（仅需 VC++ 运行库） |
 
 精确内核按 `.so` 自身位置自动定位本目录（`cpp/build/` 的上两级）；从其他目录导入时
 可设 `HIGH_PY_KERNEL_PATH=/home/ubuntu/git-high1` 显式指定。`HIGH_OPS_LIB=/path/to/lib.so`
@@ -103,4 +111,7 @@ bash tools/export_git_high1.sh /home/ubuntu/git-high1
 
 缺 `.so` 时脚本会自动 cmake/make 重建（用 `ONNXRUNTIME_ROOT` 环境变量指定 ORT
 预编译包位置，默认 `/opt/ort/onnxruntime-linux-x64-1.22.0`），然后把上面目录结构
-完整复制到目标位置。
+完整复制到目标位置；仓库 `cpp/build/windows/` 下若有 Windows DLL 也会一并打包。
+
+Windows DLL 的构建方式（GitHub Actions `windows-dll` workflow 或本机 VS 2022 + vcpkg）
+见仓库 `cpp/README.md` 的「Windows 构建」一节。

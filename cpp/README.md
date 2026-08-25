@@ -17,12 +17,12 @@ C++ 内核实测与 Python 输出的一致性（17 张样例图）：平均 MAE 
 为什么 C++ 移植不是位级 100% 一致、以及为什么整条流水线无法放进一个标准 ONNX 图，见
 [`docs/ONNX_CPP_PLAN.md`](../docs/ONNX_CPP_PLAN.md)。
 
-本目录现在构建四个产物：
+本目录现在构建四个产物（Linux 产物名 `lib*.so`，Windows 产物名 `*.dll`）：
 
 | 目标 | 说明 |
 |------|------|
-| `libhigh_removal_pyops.so` | **精确内核（默认）**：与下面 C++ 内核注册完全相同的 `ai.high:HighlightRemoval` 签名，Compute 时经 CPython 稳定 ABI 调用宿主进程内的 `highlight_removal.exact_kernel`（原始 Python 流水线本体），`session.run` 输出与 `process_image` **逐位相同**。仅限 Python 宿主；需要本仓库可导入（自动按 .so 位置定位，或设 `HIGH_PY_KERNEL_PATH`）与 mediapipe |
-| `libhigh_removal_ops.so` | **C++ 快速内核**：同一算子的完整 C++ 实现（微软官方 custom-op wrapper 方案）。只导出 `RegisterCustomOps`，不链接 libonnxruntime（OrtApi 由宿主传入），可被 Python `onnxruntime`（>= 1.22）或任意 C++ ORT 应用加载；无 Python/MediaPipe 依赖，存在亚像素级浮点尾差 |
+| `libhigh_removal_pyops.so` / `high_removal_pyops.dll` | **精确内核（默认）**：与下面 C++ 内核注册完全相同的 `ai.high:HighlightRemoval` 签名，Compute 时经 CPython 稳定 ABI 调用宿主进程内的 `highlight_removal.exact_kernel`（原始 Python 流水线本体），`session.run` 输出与 `process_image` **逐位相同**。仅限 Python 宿主（≥ 3.10）；需要本仓库可导入（自动按库自身位置定位，或设 `HIGH_PY_KERNEL_PATH`）与 mediapipe |
+| `libhigh_removal_ops.so` / `high_removal_ops.dll` | **C++ 快速内核**：同一算子的完整 C++ 实现（微软官方 custom-op wrapper 方案）。只导出 `RegisterCustomOps`，不链接 libonnxruntime（OrtApi 由宿主传入），可被 Python `onnxruntime`（>= 1.22）或任意 C++ ORT 应用加载；无 Python/MediaPipe 依赖，存在亚像素级浮点尾差 |
 | `high_onnx_session` | 单 ONNX 会话的最小 C++ 示例（RegisterCustomOpsLibrary + Ort::Session + Run，配 C++ 内核） |
 | `high_onnx` | 旧的直接调用 C++ 库的 CLI（保留，输出与单 ONNX 会话（C++ 内核）逐位相同） |
 
@@ -56,6 +56,58 @@ make -j$(nproc)
 ```
 
 说明：若系统默认 `c++` 指向 clang 且缺少对应 libstdc++ 开发文件，请像上面一样显式指定 `g++`。
+
+## Windows 构建（MSVC，产物 high_removal_ops.dll / high_removal_pyops.dll）
+
+两种方式：
+
+**方式 A：GitHub Actions（推荐，零本地环境）** —— 仓库自带
+[`.github/workflows/windows-dll.yml`](../.github/workflows/windows-dll.yml)，在 `windows-latest` 上用
+vcpkg（`x64-windows-static-md`，OpenCV/yaml-cpp **静态链接**进 DLL）+ VS 2022 + onnxruntime-win-x64-1.22.0
+构建两个 DLL，并用 Python onnxruntime 真机冒烟验证（精确内核断言与 `process_image` 逐位相同），
+产物以 artifact `windows-dll` 上传；已验证的副本也提交在 [`build/windows/`](build/windows/)。
+
+**方式 B：本机 VS 2022 x64 手动构建**（需要 CMake ≥ 3.26、Python ≥ 3.10（含 `libs/python3.lib`）、
+[vcpkg](https://github.com/microsoft/vcpkg)）：
+
+```bat
+:: 1) 依赖：OpenCV + yaml-cpp（静态库 + 动态 CRT，DLL 不携带 OpenCV 运行期依赖）
+vcpkg install "opencv4[core,fs,thread,intrinsics,jpeg,png]" yaml-cpp --triplet x64-windows-static-md
+
+:: 2) ONNX Runtime 官方预编译包（zip 内含 lib\onnxruntime.lib）
+::    https://github.com/microsoft/onnxruntime/releases → onnxruntime-win-x64-1.22.0.zip，解压到 C:\ort
+
+:: 3) 配置 + 构建（x64；ONNXRUNTIME_ROOT 指向解压目录）
+cmake -S cpp -B cpp\build -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md ^
+  -DONNXRUNTIME_ROOT=C:\ort\onnxruntime-win-x64-1.22.0
+cmake --build cpp\build --config Release --target high_removal_ops high_removal_pyops
+:: 产物：cpp\build\Release\high_removal_ops.dll 与 high_removal_pyops.dll
+```
+
+不用 vcpkg 时，也可用官方 OpenCV Windows 包 + 源码编译的 yaml-cpp：把
+`-DCMAKE_TOOLCHAIN_FILE/-DVCPKG_TARGET_TRIPLET` 换成
+`-DOpenCV_DIR=C:\opencv\build`（含 `OpenCVConfig.cmake` 的目录）与
+`-DCMAKE_PREFIX_PATH=C:\yaml-cpp-install`；注意官方 OpenCV 包为动态库
+`opencv_world4xx.dll`，此时需随 DLL 一起分发（vcpkg 静态方案没有此负担）。
+
+Windows 侧差异（源码已适配，无需改动）：
+
+- 导出符号由 `src/high_removal_ops.def` 声明（等价于 Linux 的 version script），DLL 只导出 `RegisterCustomOps`；
+- 精确内核在 Windows 链接稳定 ABI 导入库 `python3.lib`（PE 不允许未定义符号），运行期解析到宿主
+  CPython（≥ 3.10）自带的 `python3.dll`，语义与 Linux 相同：宿主必须是 Python 进程；
+- 库自身定位（自动推导仓库根）用 `GetModuleHandleEx` + `GetModuleFileNameA` 替代 `dladdr`；
+- 运行期依赖：`high_removal_ops.dll` 自包含（仅 MSVC 运行库 /MD，即 VC++ 2015-2022 Redistributable）；
+  `high_removal_pyops.dll` 额外只依赖宿主的 `python3.dll`；`onnxruntime.dll` 由宿主
+  （pip 包 onnxruntime 或 C++ 应用自身）提供，两个内核 DLL 均不携带。
+
+使用时文件名换成 DLL 即可（`tools/run_high_onnx.py` 与 `highlight_removal/onnx_session.py`
+已按平台自动选择 `.so`/`.dll`，并额外搜索 `cpp/build/Release/` 与 `cpp/build/windows/`）：
+
+```python
+so.register_custom_ops_library("cpp/build/windows/high_removal_pyops.dll")  # 或 high_removal_ops.dll
+```
 
 ## 运行（推荐）：单 ONNX 模型 + 自定义算子库
 
