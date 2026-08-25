@@ -12,6 +12,30 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 
 推荐落地位置：**Linux/macOS `~/git-high2`，Windows `%USERPROFILE%\git-high2`**。
 
+## 模型档位（四档）
+
+同一套 `ai.facehi:HighlightRemoval` 自定义算子内核，按烘焙进节点属性的
+`mode` / 配置段分成互相独立的 onnx 文件（共用同一
+`lib/libfacehi_custom_ops.so`）。强度：强力 ＞ 默认 ＞ 日常 ＞ 保护细节。
+variant 键与 `facehi_onnx.MODEL_VARIANTS` 一致：
+
+| variant | 文件 | 烘焙 mode | 特点 |
+| --- | --- | --- | --- |
+| `default` | `models/facehi.onnx` | 常用模式 | 检测=灵敏、修复=强力，默认档 |
+| `strong` | `models/facehi_strong.onnx` | 强力模式 | 去高光最狠、细节保护最少（强修复分支覆盖整个高光核心） |
+| `daily` | `models/facehi_daily.onnx` | 日常模式 | **日常/平衡**：高光检测与修复各参数取强力/保护细节两端烘焙值的中值（rgb 阈值 205、修复压制 0.825、final_blend 0.905 等），method=混合、process_scale=compromise，详见 `models/DAILY.md` |
+| `detail` | `models/facehi_detail.onnx` | 保护细节 | 去高光最弱、纹理保留最多（弱检测 + 削弱混合修复，Telea 仅近饱和核心） |
+
+> 本分支只随附 `facehi.onnx` 与 `facehi_daily.onnx`；`strong` / `detail`
+> 的模型文件在各自分支（合并后齐全）。缺某档文件时 `find_model` 返回
+> None、前端选中该档会提示，不影响其余档。每档可用环境变量覆盖模型路径：
+> 默认档 `FACEHI_ONNX_MODEL`，其它档 `FACEHI_ONNX_MODEL_STRONG` /
+> `_DAILY` / `_DETAIL`。
+
+重新生成（需在完整仓库内运行，四档同一脚本）：
+`python onnx/make_facehi_onnx.py --preset daily --out git-high2/models/facehi_daily.onnx`
+（`--preset standard / strong / detail` 同理）。
+
 ## 为什么选这个 ONNX
 
 `models/facehi.onnx`（约 6.28MB，单节点 `ai.facehi:HighlightRemoval` 自定义算子，
@@ -28,9 +52,12 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 ```
 git-high2/
 ├── README.md                 # 本文件
-├── models/facehi.onnx        # 唯一对外模型（就是「下载下来的模型」）
+├── models/facehi.onnx        # 默认档（常用模式，强力向）对外模型
+├── models/facehi_daily.onnx  # 日常/平衡档（烘焙独立「日常模式」中值配置，见 models/DAILY.md）
+├── models/DAILY.md           # 日常/平衡档说明与验证记录
+│                             # （facehi_strong.onnx / facehi_detail.onnx 由各自分支提供）
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
-├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
+├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path, variant=...) 四档
 ├── requirements.txt          # 运行依赖（版本放宽）
 ├── lib/                      # 自定义算子库：libfacehi_custom_ops.so（Linux x86-64）
 │                             #             + facehi_custom_ops.dll（Windows x64）
@@ -38,6 +65,9 @@ git-high2/
 └── cpp/                      # 编译自定义算子库所需的精简源码 + CMakeLists
                               #（含 cmake/mingw-w64-x86_64.cmake 交叉编译 toolchain）
 ```
+
+模型生成脚本在仓库根：`onnx/make_facehi_onnx.py`
+（`--preset standard / strong / daily / detail` 四档同一脚本）。
 
 ## 快速开始
 
@@ -56,7 +86,8 @@ python app_git_high2.py              # 仓库内则：python git-high2/app_git_h
 - **Python 版**：`highlight_removal.pipeline.process_image` 原始流水线
   （常用 / 高保真 / 最高质量三种模式；需要在完整仓库内运行，独立目录时此页
   会提示不可用，ONNX 页不受影响）。
-- **ONNX 版**：`models/facehi.onnx` 单会话推理（会话缓存，只加载一次）。
+- **ONNX 版**：`models/facehi.onnx`（常用/强力向）或 `models/facehi_daily.onnx`
+  （日常/平衡）单会话推理（左侧「ONNX 模型档位」切换，会话按档位缓存）。
 - **对比**：同一份解码数组同时跑两条链路，四宫格展示原图 / Python / ONNX /
   放大差分，并给出 MAE、最大像素差、差异像素占比、PSNR、硬掩码 IoU 与两边耗时。
 
@@ -68,8 +99,9 @@ python app_git_high2.py              # 仓库内则：python git-high2/app_git_h
 import sys; sys.path.insert(0, "git-high2")   # 独立目录内运行则不需要
 from facehi_onnx import remove_highlight
 
-out_bgr = remove_highlight("photo.png")                 # 返回 BGR ndarray
+out_bgr = remove_highlight("photo.png")                 # 常用档，返回 BGR ndarray
 remove_highlight("photo.png", save_to="photo_out.png")  # 直接写盘
+remove_highlight("photo.png", variant="daily")          # 日常/平衡档（facehi_daily.onnx）
 ```
 
 底层等价于：
@@ -192,8 +224,11 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 | `result` | 输出 | uint8 | 同 `image` | 去高光结果 BGR |
 | `highlight_mask` | 输出 | uint8 | `[H,W]` | 最终硬掩码 |
 
-模式：内嵌「常用模式」配置。需要其它模式可在仓库内用
-`onnx/make_facehi_onnx.py` 改 `mode` 重新生成。
+模式：`facehi.onnx` 烘焙「常用模式」，`facehi_daily.onnx` 烘焙独立的
+「日常模式」（日常/平衡，强力档与保护细节档的逐项中值配置），
+`facehi_strong.onnx` / `facehi_detail.onnx` 分别烘焙「强力模式」/「保护细节」。
+四档接口完全相同；可在仓库内用根目录
+`onnx/make_facehi_onnx.py --preset <standard|strong|daily|detail>` 重新生成。
 
 ## 验证记录（本交付包实测）
 
