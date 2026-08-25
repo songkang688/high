@@ -2,37 +2,37 @@
 
 三个独立档位模型（强力 / 日常 / 保护细节）中的**强力版**：
 **去高光最狠、细节保护最少**。本文件说明烘焙的 mode、生成方式、
-与其他两档的预期差异，以及本交付的验证记录。
+与其他两档的预期差异，以及审查/验证记录。
 
 ## 烘焙的 mode
 
 - 图中唯一节点 `ai.facehi:HighlightRemoval` 的属性 **`mode="强力模式"`**，
   内嵌配置 YAML 的 `default_mode` 同为 `强力模式`（档位烘焙进图，加载后不可切换）。
 - 内嵌 YAML 含四个模式条目：常用模式 / 高保真模式 / 最高质量模式 / **强力模式**；
-  运行时只按节点属性 `mode` 取 `强力模式` 这份。
+  运行时只按节点属性 `mode` 取 `强力模式` 这份（已用探针验证，见下）。
 - 强力模式 = 现有「常用模式」（检测=**灵敏** + 修复=**强力** + method=**混合** +
-  `process_scale=compromise`，即原 facehi.onnx 默认、去高光最狠的档位）
-  基础上，把修复/混合参数**再略加强**。检测（灵敏套）、人脸检测、分区、
-  处理分辨率全部与常用模式一致，仅 `highlight_removal` 段有差异：
+  `process_scale=compromise`）基础上加强修复/混合参数。检测（灵敏套）、
+  人脸检测、分区、处理分辨率全部与常用模式一致，仅 `highlight_removal` 段有差异：
 
 | 参数 | 常用模式 | 强力模式 | 方向 |
 | --- | --- | --- | --- |
-| brightness_suppress_strength | 0.94 | 0.97 | 亮度压制更强 |
-| chroma_restore_strength | 0.38 | 0.42 | 色度回补更强 |
-| texture_preserve_strength | 0.70 | 0.62 | 纹理保留更少 |
-| edge_protect_strength | 0.38 | 0.32 | 边缘保护更少 |
-| inpainting_radius | 6 | 7 | 修复半径更大（kernel 内上限 9） |
-| poisson_alpha_strength | 0.82 | 0.88 | 强修复混合更重 |
-| final_blend_alpha | 0.97 | 0.99 | 最终混合更接近修复结果 |
-| faithful_luminance_floor | 0.69 | 0.66 | 允许把亮度压得更低 |
-| extreme_core_extra_l | 10 | 8 | 更多像素进入极亮核心强修复分支 |
-| max_allowed_modify_area_ratio | 0.20 | 0.24 | 质量守卫上限放宽（守卫只发警告，不回退） |
-| max_allowed_mean_brightness_change | 22 | 26 | 同上 |
-| max_allowed_local_color_delta | 15 | 18 | 同上 |
+| extreme_core_extra_l | 10 | **0** | **关键杠杆**：混合模式的强修复（Telea inpaint）分支从「极亮核心」扩大到硬掩码内全部 L≥lab_l_threshold(178) 的像素——高光被周围皮肤修复填充，而不只是压亮度 |
+| brightness_suppress_strength | 0.94 | 1.0 | 亮度压制拉满 |
+| poisson_alpha_strength | 0.82 | 0.95 | 强修复混合更重 |
+| final_blend_alpha | 0.97 | 1.0 | 最终混合拉满 |
+| chroma_restore_strength | 0.38 | 0.46 | 色度回补更强 |
+| texture_preserve_strength | 0.70 | 0.55 | 纹理保留更少 |
+| edge_protect_strength | 0.38 | 0.28 | 边缘保护更少 |
+| inpainting_radius | 6 | 8 | 修复半径更大（kernel 内上限 9） |
+| faithful_luminance_floor | 0.69 | 0.62 | 允许把亮度压得更低 |
+| max_allowed_modify_area_ratio | 0.20 | 0.28 | 质量守卫上限放宽（守卫只发警告，不回退） |
+| max_allowed_mean_brightness_change | 22 | 30 | 同上 |
+| max_allowed_local_color_delta | 15 | 20 | 同上 |
 
 算法内核不变：仍是同一套 `ai.facehi` C++ 自定义算子
 （`lib/libfacehi_custom_ops.so` / `facehi_custom_ops.dll`），
 `faithful_suppress` + `strong_inpaint` 的「混合」路径，无需重新编译算子库。
+五官/背景/非皮肤强制回写原图的保护逻辑不受影响（kernel 内硬编码）。
 
 ## 如何生成
 
@@ -49,31 +49,36 @@ python onnx/make_facehi_onnx.py --preset strong --out git-high2/models/facehi_st
 `models/facehi.onnx` **保留原文件未改动**（烘焙 `mode="常用模式"`）；
 强力版单独存在于 `facehi_strong.onnx`，未把 facehi.onnx 覆盖成别的档位。
 
-## 与日常版 / 保护细节版的预期差异
+## 与日常版 / 保护细节版的差异
 
 | 档位 | 文件 | 定位 |
 | --- | --- | --- |
-| **强力**（本文件） | `facehi_strong.onnx` | 检测灵敏套 + 修复强力套再略加强：高光压得最低、修复面积最大、纹理与边缘保护最少。适合高光严重、优先「去干净」的照片 |
-| 日常 | 另一分支交付 | 预期以正常检测 + 正常修复为基准（高保真取向）：去高光与保真折中 |
-| 保护细节 | 另一分支交付 | 预期以弱检测 / 削弱修复（保真 method）为基准：改动面积最小、纹理边缘保护最多，去高光最轻 |
+| **强力**（本文件） | `facehi_strong.onnx` | 灵敏检测 + 强修复分支覆盖整个高光核心：高光压得最低、修复面积最大、纹理与边缘保护最少。适合高光严重、优先「去干净」的照片 |
+| 日常 | `facehi_daily.onnx`（另一分支交付） | 高保真取向：去高光与保真折中 |
+| 保护细节 | `facehi_detail.onnx`（另一分支交付） | 改动面积最小、纹理边缘保护最多，去高光最轻 |
 
-同一张图三档输出应可肉眼区分：强力版高光区域亮度下降最多、
-残留高光最少，但皮肤纹理与边缘细节的保留也最少。
+四档实测（`data/` 全部 17 张，高光掩码区 Lab L 平均下降，越大越狠）：
+**强力 10.125** > 默认 8.398 = 日常（当前版）8.398 > 细节 2.325；
+**17/17 张强力档均为最大**，且比默认档单张高 0.33–3.85 L。
 
-## 验证记录（本交付实测）
+## 审查/验证记录（本交付实测）
 
 环境：Ubuntu x86-64，onnxruntime 1.29.0 + `lib/libfacehi_custom_ops.so`
-（仓库自带，未重编），opencv-python 4.14.0。`data/` 全部 17 张
-（1.png–17.png）`session.Run` 全部成功：
+（仓库自带，未重编），opencv-python 4.14.0。
 
-- 输出均不是原图拷贝（每张 `(result != image).any()` 成立，
-  高光硬掩码占比 1.25%–2.65%）。
-- 与保留的默认 `facehi.onnx` 对比，**17/17 张**强力版在高光掩码区域的
-  Lab L 通道平均下降更大：强力 9.130 vs 默认 8.398（约 +8.7%）；
-  单张最大差距如 `data/4.png` 9.547 vs 8.547、`data/11.png` 8.277 vs 7.382。
-- 强力 vs 默认全图 MAE 0.011–0.030（/255）：差异集中在高光区域，
-  非高光区域不受影响（两档共用同一检测灵敏套与保护回写）。
-- 每张耗时约 0.07–0.46 秒（4 核 CPU，会话热态）。
+1. **烘焙探针（参数确实生效）**：把模型内嵌 YAML 中**只有强力模式段**的
+   `brightness_suppress_strength` 改成 0.30 后输出显著变化
+   （max pixel diff 68–69）；把**只有常用模式段**改成同样值后输出
+   **逐位不变**（max diff = 0）——证明运行时读取的正是烘焙的
+   `强力模式` 段，加强参数全部生效。
+2. **加载链路**：`find_model("strong")` / `find_model("facehi_strong.onnx")`
+   均正确定位；显式 variant 不受环境变量 `FACEHI_ONNX_MODEL` 干扰；
+   `FacehiOnnx(variant="strong")` 加载路径正确；缺失档位报中文明确错误；
+   `remove_highlight` 会话缓存按档位隔离（default / strong 两个键）。
+3. **17/17 张 `session.Run` 成功**：输出均不是原图拷贝
+   （高光硬掩码占比 1.25%–2.65%）；强力 vs 默认在掩码区内 MAE
+   1.00–4.61（均值 2.17，肉眼可辨），非高光区不受影响。
+4. **每张耗时** 0.07–0.5 秒（4 核 CPU，会话热态）。
 
 快速复现：
 

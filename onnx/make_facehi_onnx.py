@@ -52,13 +52,15 @@ CONFIG_SECTIONS = ("face_detection", "regions", "highlight_detection",
 # ---------------------------------------------------------------------------
 
 # 强力版：基准就是现有「常用模式」（检测=灵敏、修复=强力、method=混合、
-# process_scale=compromise，当前默认里去高光最狠的档位），在其上把
-# faithful_suppress / strong_inpaint 的混合参数再略加强（同一套
+# process_scale=compromise，当前默认里去高光最狠的档位），在其上加强
+# faithful_suppress / strong_inpaint 的混合参数（同一套
 # ai.facehi C++ kernel，不换算法内核）：
-#   - 亮度压制、色度回补、Poisson/最终混合 alpha 略升；
-#   - 纹理保留与边缘保护略降（细节保护最少）；
-#   - inpainting 半径 6→7（kernel 内 clamp 上限 9）；
-#   - 极亮核心阈值 extra_l 10→8（更多像素进入强修复分支）；
+#   - 关键杠杆 extreme_core_extra_l 10→0：混合模式的强修复（Telea inpaint）
+#     分支从「极亮核心」扩大到硬掩码内全部 L≥lab_l_threshold 的像素，
+#     高光被周围皮肤修复填充而不只是压亮度；
+#   - 亮度压制 / Poisson 混合 / 最终混合 alpha 拉满或接近拉满；
+#   - 纹理保留与边缘保护降低（细节保护最少）；
+#   - inpainting 半径 6→8（kernel 内 clamp 上限 9）；
 #   - 质量守卫上限相应放宽（守卫只发警告，不回退结果）。
 PRESETS: dict[str, dict] = {
     "strong": {
@@ -67,21 +69,21 @@ PRESETS: dict[str, dict] = {
         "default_out": "facehi_strong.onnx",
         "overrides": {
             "highlight_removal": {
-                "brightness_suppress_strength": 0.97,
-                "chroma_restore_strength": 0.42,
-                "texture_preserve_strength": 0.62,
-                "edge_protect_strength": 0.32,
-                "inpainting_radius": 7,
-                "poisson_alpha_strength": 0.88,
-                "final_blend_alpha": 0.99,
-                "faithful_luminance_floor": 0.66,
-                "extreme_core_extra_l": 8,
-                "max_allowed_modify_area_ratio": 0.24,
-                "max_allowed_mean_brightness_change": 26,
-                "max_allowed_local_color_delta": 18,
+                "brightness_suppress_strength": 1.0,
+                "chroma_restore_strength": 0.46,
+                "texture_preserve_strength": 0.55,
+                "edge_protect_strength": 0.28,
+                "inpainting_radius": 8,
+                "poisson_alpha_strength": 0.95,
+                "final_blend_alpha": 1.0,
+                "faithful_luminance_floor": 0.62,
+                "extreme_core_extra_l": 0,
+                "max_allowed_modify_area_ratio": 0.28,
+                "max_allowed_mean_brightness_change": 30,
+                "max_allowed_local_color_delta": 20,
             },
         },
-        "doc": "强力版：去高光最狠、细节保护最少（常用模式基础上略加强修复与混合）",
+        "doc": "强力版：去高光最狠、细节保护最少（常用模式基础上加强修复与混合，强修复分支覆盖整个高光核心）",
     },
 }
 

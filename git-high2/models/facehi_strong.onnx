@@ -1,8 +1,8 @@
-	facehi2�面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）；强力版：去高光最狠、细节保护最少（常用模式基础上略加强修复与混合）:���
-���
+	facehi2�面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）；强力版：去高光最狠、细节保护最少（常用模式基础上加强修复与混合，强修复分支覆盖整个高光核心）:���
+���
 image
-	landmarksresulthighlight_maskfacehi_highlight_removal"HighlightRemoval*�a
-config_yaml"�adefault_mode: 强力模式
+	landmarksresulthighlight_maskfacehi_highlight_removal"HighlightRemoval*�a
+config_yaml"�adefault_mode: 强力模式
 modes:
   常用模式:
     face_detection:
@@ -358,18 +358,18 @@ modes:
       brow_region_max_fraction: 0.32
     highlight_removal:
       mode: 混合
-      brightness_suppress_strength: 0.97
-      chroma_restore_strength: 0.42
-      texture_preserve_strength: 0.62
-      edge_protect_strength: 0.32
-      inpainting_radius: 7
-      poisson_alpha_strength: 0.88
-      final_blend_alpha: 0.99
-      max_allowed_modify_area_ratio: 0.24
-      max_allowed_mean_brightness_change: 26
-      max_allowed_local_color_delta: 18
-      faithful_luminance_floor: 0.66
-      extreme_core_extra_l: 8
+      brightness_suppress_strength: 1.0
+      chroma_restore_strength: 0.46
+      texture_preserve_strength: 0.55
+      edge_protect_strength: 0.28
+      inpainting_radius: 8
+      poisson_alpha_strength: 0.95
+      final_blend_alpha: 1.0
+      max_allowed_modify_area_ratio: 0.28
+      max_allowed_mean_brightness_change: 30
+      max_allowed_local_color_delta: 20
+      faithful_luminance_floor: 0.62
+      extreme_core_extra_l: 0
     pipeline:
       process_scale: compromise
       enable_roi_removal: true
@@ -42333,7 +42333,7 @@ Identity_2
  B
 
 ai.onnx.ml�*
-mode"强力模式�2�整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写；强力版：去高光最狠、细节保护最少（常用模式基础上略加强修复与混合）:	ai.facehifacehi* B	landmarksJ R�facehi 单一 ONNX 入口。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。烘焙档位 mode=强力模式。Z
+mode"强力模式�2�整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写；强力版：去高光最狠、细节保护最少（常用模式基础上加强修复与混合，强修复分支覆盖整个高光核心）:	ai.facehifacehi* B	landmarksJ R�facehi 单一 ONNX 入口。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。烘焙档位 mode=强力模式。Z
 image
 Z
 	landmarks
