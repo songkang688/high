@@ -4,9 +4,9 @@
 三种工作模式（顶部标签切换）：
   - Python 版：highlight_removal.pipeline.process_image + cli_process.load_cli_config
     （常用模式 / 高保真模式 / 最高质量模式；需要在仓库内运行）
-  - ONNX 版：git-high2/models/facehi.onnx（常用模式）或 facehi_detail.onnx
-    （保护细节，页内可切换）+ libfacehi_custom_ops 单会话推理
-    （会话按模型懒加载并缓存；配置内嵌在各自模型里）
+  - ONNX 版：git-high2/models/facehi*.onnx + libfacehi_custom_ops 单会话推理
+    （会话按档位懒加载并缓存；档位烘焙在各 onnx 文件内：facehi.onnx=默认常用模式，
+    facehi_strong.onnx=强力版·去高光最狠）
   - 对比：同一份解码数组同时跑两条链路，四宫格（原图 / Python / ONNX / 放大差分）
     并给出 MAE / 最大像素差 / 差异像素占比 / PSNR / 硬掩码 IoU / 两边耗时
 
@@ -85,18 +85,23 @@ DEFAULT_MODE = "常用模式"
 DIFF_BASE_CHOICES = ["Python vs ONNX", "原图 vs Python", "原图 vs ONNX"]
 DEFAULT_DIFF_GAIN = 4  # 与 highlight_removal.pipeline 差分图风格一致：clip(absdiff * 4)
 
-ONNX_MODE_NOTE = (
-    "处理模式仅对 Python 版生效；ONNX 模型内嵌各自的合并配置"
-    "（facehi.onnx=常用模式，facehi_detail.onnx=保护细节），"
-    "切换本处理模式不会改变 ONNX 输出；ONNX 版页签内可切换模型。"
-)
+# ONNX 档位 = 独立 onnx 文件（档位烘焙在图节点属性里，加载后不可切换）。
+# 标签 → facehi_onnx.MODEL_VARIANTS 里的档位别名；四档全列，
+# models/ 下缺对应文件时运行报友好提示（不崩），补上文件即可用。
+_ONNX_VARIANT_LABELS = [
+    ("facehi.onnx（默认 · 常用模式）", "default"),
+    ("facehi_strong.onnx（强力 · 去高光最狠）", "strong"),
+    ("facehi_daily.onnx（日常）", "daily"),
+    ("facehi_detail.onnx（保护细节 · 纹理/五官优先）", "detail"),
+]
+ONNX_VARIANT_BY_LABEL = dict(_ONNX_VARIANT_LABELS)
+ONNX_VARIANT_CHOICES = list(ONNX_VARIANT_BY_LABEL)
+DEFAULT_ONNX_VARIANT_LABEL = ONNX_VARIANT_CHOICES[0]
 
-# ONNX 页签的模型选择（显示名 → facehi_onnx.MODEL_VARIANTS 键）
-ONNX_VARIANT_CHOICES = {
-    "常用（facehi.onnx，强力去高光）": "default",
-    "保护细节（facehi_detail.onnx，纹理优先、去高光弱一点）": "detail",
-}
-DEFAULT_ONNX_VARIANT_LABEL = next(iter(ONNX_VARIANT_CHOICES))
+ONNX_MODE_NOTE = (
+    "处理模式仅对 Python 版生效；ONNX 输出档位由所选 onnx 文件烘焙决定"
+    "（见下方「ONNX 模型档位」）。"
+)
 
 BUILD_HELP_MD = """**未找到自定义算子库 `libfacehi_custom_ops.so`。** ONNX 版需要先编译一次（详见 `git-high2/README.md` 与 `cpp/README.md`）：
 
@@ -153,29 +158,31 @@ class OnnxUnavailableError(RuntimeError):
 
 
 _ONNX_LOCK = threading.Lock()
-_ONNX_CACHE: Dict[str, Any] = {"wrappers": {}, "load_seconds": {}}
+_ONNX_CACHE: Dict[str, Dict[str, Any]] = {}  # variant -> {"wrapper", "load_seconds"}
 
 
 def get_onnx_wrapper(variant: str = "default") -> FacehiOnnx:
     if ort is None:
         raise OnnxUnavailableError("未安装 onnxruntime，请先执行：`pip install onnxruntime`")
     with _ONNX_LOCK:
-        cached = _ONNX_CACHE["wrappers"].get(variant)
+        cached = _ONNX_CACHE.get(variant)
         if cached is not None:
-            return cached
+            return cached["wrapper"]
         if find_model(variant) is None:
-            name, env_key = MODEL_VARIANTS[variant]
+            name = MODEL_VARIANTS.get(variant, variant)
+            env_key = ("FACEHI_ONNX_MODEL" if variant == "default"
+                       else f"FACEHI_ONNX_MODEL_{variant.upper()}")
             raise OnnxUnavailableError(
-                f"未找到模型 `git-high2/models/{name}`，"
-                "请确认整夹拷贝时包含 models/ 子目录，"
-                f"或设置环境变量 {env_key} 指向模型文件。"
+                f"未找到模型 `git-high2/models/{name}`（档位 {variant}）。"
+                "该档位的 onnx 可能尚未生成/拷贝：请确认 models/ 子目录包含该文件，"
+                f"或设置环境变量 {env_key} 指向模型文件；其它档位不受影响。"
             )
         if find_ops_lib() is None:
             raise OnnxUnavailableError(BUILD_HELP_MD)
         t0 = time.perf_counter()
         wrapper = FacehiOnnx(variant=variant)
-        _ONNX_CACHE["wrappers"][variant] = wrapper
-        _ONNX_CACHE["load_seconds"][variant] = time.perf_counter() - t0
+        _ONNX_CACHE[variant] = {"wrapper": wrapper,
+                                "load_seconds": time.perf_counter() - t0}
         return wrapper
 
 
@@ -311,10 +318,8 @@ def ui_run_python(image_path, mode_name):
     return _bgr_to_rgb(out.result_bgr), _mask_rgb(out.highlight_mask), report
 
 
-def ui_run_onnx(image_path, _mode_name, variant_label):
-    variant = ONNX_VARIANT_CHOICES.get(variant_label, "default")
-    model_name, _ = MODEL_VARIANTS[variant]
-    variant_note = "内嵌常用模式" if variant == "default" else "内嵌保护细节模式"
+def ui_run_onnx(image_path, _mode_name, onnx_variant_label):
+    variant = ONNX_VARIANT_BY_LABEL.get(onnx_variant_label, "default")
     bgr = _decode_input(image_path)
     try:
         result, mask, elapsed = _run_onnx(bgr, variant)
@@ -325,12 +330,12 @@ def ui_run_onnx(image_path, _mode_name, variant_label):
     h, w = bgr.shape[:2]
     saved = _save_result(f"onnx_result_{variant}", result)
     load_note = ""
-    load_seconds = _ONNX_CACHE["load_seconds"].get(variant)
-    if load_seconds is not None:
-        load_note = f" ｜ 会话加载 {load_seconds:.2f} 秒（仅首次）"
+    cached = _ONNX_CACHE.get(variant)
+    if cached is not None and cached["load_seconds"] is not None:
+        load_note = f" ｜ 会话加载 {cached['load_seconds']:.2f} 秒（仅首次）"
     report = (
-        f"**耗时 {elapsed:.3f} 秒** ｜ 配置：{model_name} {variant_note} ｜ "
-        f"输出 {w}×{h} ｜ 已保存 `{saved}`{load_note}"
+        f"**耗时 {elapsed:.3f} 秒** ｜ 模型：{MODEL_VARIANTS.get(variant, variant)}"
+        f"（档位烘焙在图内） ｜ 输出 {w}×{h} ｜ 已保存 `{saved}`{load_note}"
     )
     return _bgr_to_rgb(result), _mask_rgb(mask), report
 
@@ -382,7 +387,8 @@ def ui_update_diff(state, diff_base, diff_gain, diff_auto):
     return _bgr_to_rgb(diff_img), note
 
 
-def ui_run_compare(image_path, mode_name, diff_base, diff_gain, diff_auto):
+def ui_run_compare(image_path, mode_name, onnx_variant_label, diff_base, diff_gain, diff_auto):
+    variant = ONNX_VARIANT_BY_LABEL.get(onnx_variant_label, "default")
     bgr = _decode_input(image_path)
     orig_rgb = _bgr_to_rgb(bgr)
     state: Dict[str, Any] = {"orig": bgr, "py": None, "onnx": None}
@@ -408,10 +414,11 @@ def ui_run_compare(image_path, mode_name, diff_base, diff_gain, diff_auto):
     onnx_rgb = None
     onnx_error_md = None
     try:
-        onnx_result, onnx_mask, t_onnx = _run_onnx(bgr)
+        onnx_result, onnx_mask, t_onnx = _run_onnx(bgr, variant)
         state["onnx"] = onnx_result
         onnx_rgb = _bgr_to_rgb(onnx_result)
-        notes.append("ONNX：耗时 {:.3f} 秒（内嵌常用配置）".format(t_onnx))
+        notes.append("ONNX：耗时 {:.3f} 秒（{}）".format(
+            t_onnx, MODEL_VARIANTS.get(variant, variant)))
     except OnnxUnavailableError as exc:
         onnx_error_md = str(exc)
         notes.append("ONNX：不可用（见下方说明）")
@@ -536,19 +543,18 @@ def _env_status_md() -> str:
             ops_text = f"已就绪（`{ops_path}`）"
     else:
         ops_text = "未编译，ONNX 版页面内含构建说明"
-
-    def _model_text(variant: str) -> str:
+    model_lines = []
+    for variant, name in MODEL_VARIANTS.items():
         path = find_model(variant)
-        return f"已就绪（{path.stat().st_size / 1e6:.1f} MB）" if path is not None else "缺失"
-
+        state = f"已就绪（{path.stat().st_size / 1e6:.1f} MB）" if path is not None else "缺失"
+        model_lines.append(f"`models/{name}`：{state}")
     ort_text = ort.__version__ if ort is not None else "未安装（`pip install onnxruntime`）"
     py_text = "已就绪（完整仓库）" if PY_PIPELINE_ERROR is None else "不可用（独立目录运行）"
     return (
         "**运行环境**\n\n"
         f"onnxruntime：{ort_text}\n\n"
         f"OpenCV：{cv2.__version__} ｜ Gradio：{gr.__version__}\n\n"
-        f"常用模型 `models/facehi.onnx`：{_model_text('default')}\n\n"
-        f"保护细节 `models/facehi_detail.onnx`：{_model_text('detail')}\n\n"
+        + "\n\n".join(model_lines) + "\n\n"
         f"自定义算子库：{ops_text}\n\n"
         f"Python 原始流水线：{py_text}"
     )
@@ -620,6 +626,13 @@ def build_app() -> gr.Blocks:
                     label="处理模式",
                     info=ONNX_MODE_NOTE,
                 )
+                onnx_variant_dd = gr.Dropdown(
+                    choices=ONNX_VARIANT_CHOICES,
+                    value=DEFAULT_ONNX_VARIANT_LABEL,
+                    label="ONNX 模型档位（独立 onnx 文件，档位烘焙在图内）",
+                    info="强力=去高光最狠；保护细节=改动最少、纹理/五官优先"
+                         "（见 models/DETAIL.md）；缺对应文件的档位运行时会提示。",
+                )
                 gr.Markdown(_env_status_md(), elem_classes=["hl-note"])
 
             # 右栏：三种工作模式（主内容，占大空间）
@@ -633,13 +646,6 @@ def build_app() -> gr.Blocks:
                         py_report = gr.Markdown("", elem_classes=["hl-report"])
 
                     with gr.Tab("ONNX 版"):
-                        onnx_variant_radio = gr.Radio(
-                            choices=list(ONNX_VARIANT_CHOICES),
-                            value=DEFAULT_ONNX_VARIANT_LABEL,
-                            label="ONNX 模型",
-                            info="常用=强力去高光；保护细节=改动更少、纹理保留更好、"
-                                 "高光残留可略多（详见 models/DETAIL.md）",
-                        )
                         onnx_btn = gr.Button("运行 ONNX 版", variant="primary")
                         with gr.Row():
                             onnx_result = gr.Image(label="去高光结果", interactive=False, height=520, scale=3)
@@ -682,12 +688,12 @@ def build_app() -> gr.Blocks:
         )
         onnx_btn.click(
             ui_run_onnx,
-            inputs=[input_image, mode_radio, onnx_variant_radio],
+            inputs=[input_image, mode_radio, onnx_variant_dd],
             outputs=[onnx_result, onnx_mask, onnx_report],
         )
         cmp_btn.click(
             ui_run_compare,
-            inputs=[input_image, mode_radio, diff_base, diff_gain, diff_auto],
+            inputs=[input_image, mode_radio, onnx_variant_dd, diff_base, diff_gain, diff_auto],
             outputs=[cmp_orig, cmp_py, cmp_onnx, cmp_diff, cmp_diff_note, cmp_metrics, cmp_report, cmp_state],
         )
         diff_inputs = [cmp_state, diff_base, diff_gain, diff_auto]

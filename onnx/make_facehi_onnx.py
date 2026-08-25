@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""生成 facehi 系列单文件 ONNX：单一 ONNX 模型封装整条去高光流水线。
+"""生成 facehi*.onnx：单一 ONNX 模型封装整条去高光流水线。
 
 采用 ONNX Runtime 官方支持的「自定义算子包装外部流水线」形态
 （onnxruntime.ai/docs/reference/operators/add-custom-op.html，
@@ -8,25 +8,32 @@
 
 - 图中只有一个自定义域 ai.facehi 的节点 HighlightRemoval；
 - 两个子模型（face_detector.onnx / face_landmarks_detector.onnx）、
-  合并后的模式配置 YAML、Haar 兜底级联 XML，全部序列化进节点属性；
+  按 cli_process.load_cli_config 合并后的模式配置 YAML、
+  Haar 兜底级联 XML，全部序列化进节点属性；
+- 节点属性 mode 决定运行时实际生效的档位（烘焙进图，加载后不可切换）；
 - 运行需要注册配套的自定义算子库 libfacehi_custom_ops.so（ORT 设计如此，
   任何含自定义域的 ONNX 都必须带 kernel 实现库）。
 
-预设（--preset）：
-  full    默认。onnx/models/facehi.onnx：内嵌常用/高保真/最高质量三种模式
-          合并配置，节点属性 mode=常用模式（强力去高光）。
-  detail  git-high2/models/facehi_detail.onnx：保护细节版。内嵌单一
-          「保护细节」模式（检测=弱、修复=削弱、method=混合 + 纹理优先键），
-          节点属性 mode=保护细节。去高光故意弱一点，换取五官/皮肤纹理保留。
-
 用法：
-  .venv/bin/python onnx/make_facehi_onnx.py                 # 生成 facehi.onnx
-  .venv/bin/python onnx/make_facehi_onnx.py --preset detail # 生成 facehi_detail.onnx
+  # 默认：生成 onnx/models/facehi.onnx（烘焙 mode=常用模式，与历史行为一致）
+  python onnx/make_facehi_onnx.py
+
+  # 烘焙任一标准模式（常用模式 / 高保真模式 / 最高质量模式）
+  python onnx/make_facehi_onnx.py --mode 常用模式 --out git-high2/models/facehi.onnx
+
+  # 强力版（三独立档位之一）：检测=灵敏 + 修复=强力 + method=混合 +
+  # process_scale=compromise（即现有常用模式），并在此之上加强修复/混合参数
+  python onnx/make_facehi_onnx.py --preset strong --out git-high2/models/facehi_strong.onnx
+
+  # 保护细节版（三独立档位之一）：检测=弱 + 修复=削弱 + method=混合 +
+  # 纹理优先键 + 保护区加宽（纹理/五官优先，去高光故意弱一点）
+  python onnx/make_facehi_onnx.py --preset detail --out git-high2/models/facehi_detail.onnx
 """
 from __future__ import annotations
 
 import argparse
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -40,76 +47,121 @@ if str(ROOT) not in sys.path:
 
 MODELS_DIR = ROOT / "onnx" / "models"
 MODES = ("常用模式", "高保真模式", "最高质量模式")
-DETAIL_MODE = "保护细节"
 CONFIG_SECTIONS = ("face_detection", "regions", "highlight_detection",
                    "highlight_removal", "pipeline")
 
-# 各预设：输出路径 + 烘焙进节点属性的 mode。
-PRESETS = {
-    "full": {"out": MODELS_DIR / "facehi.onnx", "mode": "常用模式"},
-    "detail": {"out": ROOT / "git-high2" / "models" / "facehi_detail.onnx",
-               "mode": DETAIL_MODE},
+# ---------------------------------------------------------------------------
+# 独立档位预设（每个预设 = 基准标准模式 + 可选的检测/修复预设 merge +
+# 少量差异项，烘焙为一个新 mode）。本文件当前实现强力版与保护细节版；
+# 日常版由其分支补充自己的 preset。
+# ---------------------------------------------------------------------------
+
+# 强力版：基准就是现有「常用模式」（检测=灵敏、修复=强力、method=混合、
+# process_scale=compromise，当前默认里去高光最狠的档位），在其上加强
+# faithful_suppress / strong_inpaint 的混合参数（同一套
+# ai.facehi C++ kernel，不换算法内核）：
+#   - 关键杠杆 extreme_core_extra_l 10→0：混合模式的强修复（Telea inpaint）
+#     分支从「极亮核心」扩大到硬掩码内全部 L≥lab_l_threshold 的像素，
+#     高光被周围皮肤修复填充而不只是压亮度；
+#   - 亮度压制 / Poisson 混合 / 最终混合 alpha 拉满或接近拉满；
+#   - 纹理保留与边缘保护降低（细节保护最少）；
+#   - inpainting 半径 6→8（kernel 内 clamp 上限 9）；
+#   - 质量守卫上限相应放宽（守卫只发警告，不回退结果）。
+PRESETS: dict[str, dict] = {
+    "strong": {
+        "mode_name": "强力模式",
+        "base_mode": "常用模式",
+        "default_out": "facehi_strong.onnx",
+        "overrides": {
+            "highlight_removal": {
+                "brightness_suppress_strength": 1.0,
+                "chroma_restore_strength": 0.46,
+                "texture_preserve_strength": 0.55,
+                "edge_protect_strength": 0.28,
+                "inpainting_radius": 8,
+                "poisson_alpha_strength": 0.95,
+                "final_blend_alpha": 1.0,
+                "faithful_luminance_floor": 0.62,
+                "extreme_core_extra_l": 0,
+                "max_allowed_modify_area_ratio": 0.28,
+                "max_allowed_mean_brightness_change": 30,
+                "max_allowed_local_color_delta": 20,
+            },
+        },
+        "doc": "强力版：去高光最狠、细节保护最少（常用模式基础上加强修复与混合，强修复分支覆盖整个高光核心）",
+    },
+    # 保护细节版：纹理/五官优先，去高光故意弱一点（弱于日常与强力）。
+    # 底座取「高保真模式」（compromise 尺度、检测/修复=正常），再 merge
+    # 检测=「弱」、修复=「削弱」两套仓库预设，其上叠加纹理优先键
+    #（参考 configs/experimental_better.yaml 思路，只用现有 C++ 内核支持的键）：
+    #   - method 改回「混合」且 extreme_core_extra_l 30：Telea 强修复只处理
+    #     近饱和白斑（弱检测下 198+30=228），其余油光走保真 Lab 压制，
+    #     避免 Telea 大面积平滑抹掉皮肤纹理；
+    #   - texture_preserve_strength 1.0：高频纹理回加拉满（内核 0.16×strength 封顶）；
+    #   - edge_protect_strength 0.60：纹理边界少动；
+    #   - 保护区加宽（protect_expand_radius 7、eye_protect_extra_radius 1.6）：
+    #     眼鼻嘴保护区更干净。
+    "detail": {
+        "mode_name": "保护细节",
+        "base_mode": "高保真模式",
+        "default_out": "facehi_detail.onnx",
+        "detection_preset": "弱",
+        "removal_preset": "削弱",
+        "overrides": {
+            "highlight_removal": {
+                "mode": "混合",
+                "extreme_core_extra_l": 30,
+                "texture_preserve_strength": 1.0,
+                "edge_protect_strength": 0.60,
+            },
+            "regions": {
+                "protect_expand_radius": 7,
+                "eye_protect_extra_radius": 1.6,
+            },
+        },
+        "doc": "保护细节版：纹理/五官优先、去高光故意弱一点（检测=弱、修复=削弱、混合法 Telea 阈值+30、纹理回加拉满、保护区加宽）",
+    },
 }
 
 
-def build_config_yaml() -> str:
-    """full 预设：用 cli_process.load_cli_config 生成三种模式合并配置（与 Python CLI 完全一致）。"""
+def build_modes_config() -> dict:
+    """用 cli_process.load_cli_config 生成各标准模式合并后的配置（与 Python CLI 完全一致）。"""
     from cli_process import load_cli_config
 
     modes = {}
     for mode in MODES:
         cfg = load_cli_config(mode)
         modes[mode] = {sec: cfg.get(sec, {}) for sec in CONFIG_SECTIONS}
-    doc = {"default_mode": "常用模式", "modes": modes}
-    return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    return modes
 
 
-def build_detail_config() -> dict:
-    """detail 预设：「保护细节」模式合并配置。
+def apply_preset(modes: dict, preset: dict) -> str:
+    """基于基准模式生成预设档位配置，追加进 modes；返回新 mode 名。
 
-    组合思路（去高光故意弱一点，换五官/皮肤纹理尽量保留）：
-    - 底座与常用/高保真相同：cli_process.load_cli_config 的 pipeline 固定四键
-      + process_scale=compromise（取高保真模式底座 = 检测/修复均为「正常」）；
-    - 检测 ←「弱」预设（configs/detection_sensitivity_presets.yaml）：阈值抬高、
-      掩码不膨胀反腐蚀、区域面积上限收紧 → 改动像素显著减少、掩码更贴核心；
-    - 修复 ←「削弱」预设（configs/removal_intensity_presets.yaml）：压制强度
-      0.94→0.68、最终混合 0.97→0.82、inpaint 半径 6→3 → 高光残留可略多；
-    - 在削弱之上把 method 改回「混合」并叠加纹理优先键（参考
-      configs/experimental_better.yaml 的思路，只用现有 C++ 内核支持的键）：
-      * extreme_core_extra_l: 30 —— Telea 强修复核心阈值抬到 lab_l_threshold+30
-        （弱检测下 198+30=228，只处理近饱和白斑），其余油光全走保真 Lab 压制，
-        避免 Telea 大面积平滑抹掉皮肤纹理；
-      * texture_preserve_strength: 1.0 —— 保真压制的高频纹理回加拉满
-        （内核系数 0.16×strength 封顶）；
-      * edge_protect_strength: 0.60 —— 边缘保护再抬一档，纹理边界少动；
-    - regions 保护区加宽：protect_expand_radius 5→7、eye_protect_extra_radius
-      1.0→1.6 → 眼鼻嘴保护区更干净。
+    可选字段 detection_preset / removal_preset：merge 仓库敏感度/强度预设
+    （configs/detection_sensitivity_presets.yaml / removal_intensity_presets.yaml，
+    与 cli_process._merge_preset 完全一致），随后再叠加 overrides。
     """
-    from cli_process import (INTENSITY_PATH, SENSITIVITY_PATH, _merge_preset,
-                             load_cli_config)
+    from cli_process import INTENSITY_PATH, SENSITIVITY_PATH, _merge_preset
 
-    cfg = load_cli_config("高保真模式")
-    cfg["highlight_detection"] = _merge_preset(
-        cfg.get("highlight_detection", {}), SENSITIVITY_PATH, "弱")
-    cfg["highlight_removal"] = _merge_preset(
-        cfg.get("highlight_removal", {}), INTENSITY_PATH, "削弱")
-    cfg["highlight_removal"].update({
-        "mode": "混合",
-        "extreme_core_extra_l": 30,
-        "texture_preserve_strength": 1.0,
-        "edge_protect_strength": 0.60,
-    })
-    cfg["regions"].update({
-        "protect_expand_radius": 7,
-        "eye_protect_extra_radius": 1.6,
-    })
-    return cfg
+    mode_name = preset["mode_name"]
+    cfg = deepcopy(modes[preset["base_mode"]])
+    if preset.get("detection_preset"):
+        cfg["highlight_detection"] = _merge_preset(
+            cfg.get("highlight_detection", {}), SENSITIVITY_PATH,
+            preset["detection_preset"])
+    if preset.get("removal_preset"):
+        cfg["highlight_removal"] = _merge_preset(
+            cfg.get("highlight_removal", {}), INTENSITY_PATH,
+            preset["removal_preset"])
+    for section, values in preset["overrides"].items():
+        cfg.setdefault(section, {}).update(values)
+    modes[mode_name] = cfg
+    return mode_name
 
 
-def build_detail_config_yaml() -> str:
-    cfg = build_detail_config()
-    doc = {"default_mode": DETAIL_MODE,
-           "modes": {DETAIL_MODE: {sec: cfg.get(sec, {}) for sec in CONFIG_SECTIONS}}}
+def config_yaml_text(modes: dict, default_mode: str) -> str:
+    doc = {"default_mode": default_mode, "modes": modes}
     return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
 
 
@@ -118,17 +170,21 @@ def bytes_tensor(name: str, data: bytes) -> onnx.TensorProto:
     return helper.make_tensor(name, TensorProto.UINT8, [len(arr)], arr.tobytes(), raw=True)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--preset", choices=sorted(PRESETS), default="full",
-                    help="full=facehi.onnx（常用模式）；detail=facehi_detail.onnx（保护细节）")
-    ap.add_argument("--out", default=None, help="覆盖默认输出路径（可选）")
-    args = ap.parse_args()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="生成 facehi 单文件 ONNX（可选烘焙档位）")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--mode", choices=MODES, default=None,
+                       help="烘焙的标准模式（默认：常用模式）")
+    group.add_argument("--preset", choices=sorted(PRESETS), default=None,
+                       help="烘焙的独立档位预设（如 strong=强力版），与 --mode 互斥")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="输出路径（默认 onnx/models/facehi.onnx；"
+                             "--preset 时默认 onnx/models/<preset 对应文件名>）")
+    return parser.parse_args(argv)
 
-    preset = PRESETS[args.preset]
-    out_path = Path(args.out) if args.out else preset["out"]
-    mode = preset["mode"]
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     detector = (MODELS_DIR / "face_detector.onnx").read_bytes()
     landmarks = (MODELS_DIR / "face_landmarks_detector.onnx").read_bytes()
@@ -138,29 +194,17 @@ def main() -> int:
     haar_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
     haar_xml = haar_path.read_bytes() if haar_path.is_file() else b""
 
-    if args.preset == "detail":
-        config_yaml = build_detail_config_yaml()
-        node_doc = ("整条面部去高光流水线（保护细节版）：BlazeFace 检测→478点关键点→分区→"
-                    "弱敏感度高光检测→削弱混合修复（Telea 仅近饱和核心）→加宽保护回写。"
-                    "纹理优先：去高光故意弱一点，换五官/皮肤纹理尽量保留。")
-        graph_doc = (
-            "facehi 保护细节版单一 ONNX 入口（内嵌「保护细节」模式：检测=弱、修复=削弱、"
-            "method=混合、Telea 核心阈值 +30、纹理回加拉满、保护区加宽）。"
-            "输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；"
-            "输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。"
-            "必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。"
-        )
-        model_doc = ("面部去高光整条流水线的单一 ONNX 封装——保护细节版"
-                     "（ORT 自定义算子包装外部流水线；mode=保护细节）")
+    modes = build_modes_config()
+    if args.preset:
+        preset = PRESETS[args.preset]
+        baked_mode = apply_preset(modes, preset)
+        out_path = args.out or (MODELS_DIR / preset["default_out"])
+        doc_extra = preset["doc"]
     else:
-        config_yaml = build_config_yaml()
-        node_doc = "整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写"
-        graph_doc = (
-            "facehi 单一 ONNX 入口。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；"
-            "输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。"
-            "必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。"
-        )
-        model_doc = "面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）"
+        baked_mode = args.mode or "常用模式"
+        out_path = args.out or (MODELS_DIR / "facehi.onnx")
+        doc_extra = f"烘焙档位：{baked_mode}"
+    config_yaml = config_yaml_text(modes, default_mode=baked_mode)
 
     node = helper.make_node(
         "HighlightRemoval",
@@ -172,8 +216,9 @@ def main() -> int:
         landmarks_onnx=bytes_tensor("landmarks_onnx", landmarks),
         haar_xml=bytes_tensor("haar_xml", haar_xml),
         config_yaml=config_yaml,
-        mode=mode,
-        doc_string=node_doc,
+        mode=baked_mode,
+        doc_string=("整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写；"
+                    + doc_extra),
     )
 
     # image: uint8 BGR [H,W,3]（也接受 [1,H,W,3]，故不固定秩）。
@@ -190,26 +235,32 @@ def main() -> int:
 
     graph = helper.make_graph(
         nodes=[node],
-        name="facehi" if args.preset == "full" else "facehi_detail",
+        name="facehi",
         inputs=[image_vi, lm_vi],
         outputs=[result_vi, mask_vi],
         initializer=[lm_default],
-        doc_string=graph_doc,
+        doc_string=(
+            "facehi 单一 ONNX 入口。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；"
+            "输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。"
+            "必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。"
+            f"烘焙档位 mode={baked_mode}。"
+        ),
     )
 
     model = helper.make_model(
         graph,
         opset_imports=[helper.make_opsetid("", 19), helper.make_opsetid("ai.facehi", 1)],
         producer_name="facehi",
-        doc_string=model_doc,
+        doc_string=("面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）；"
+                    + doc_extra),
     )
     model.ir_version = 9
     out_path.parent.mkdir(parents=True, exist_ok=True)
     onnx.save(model, str(out_path))
     size_mb = out_path.stat().st_size / 1e6
-    print(f"[完成] {out_path}（{size_mb:.2f} MB，preset={args.preset}，mode={mode}，"
+    print(f"[完成] {out_path}（{size_mb:.2f} MB，mode={baked_mode}，"
           f"内嵌 detector={len(detector)}B, landmarks={len(landmarks)}B, "
-          f"haar={len(haar_xml)}B）")
+          f"haar={len(haar_xml)}B, modes={list(modes)}）")
     return 0
 
 

@@ -51,9 +51,16 @@ sess = ort.InferenceSession("git-high2/models/facehi_detail.onnx", so)
 result, mask = sess.run(None, {"image": bgr_uint8_hwc})
 ```
 
-前端（`app_git_high2.py`）ONNX 版页签内可直接切换「常用 / 保护细节」模型。
-环境变量 `FACEHI_ONNX_MODEL_DETAIL` 可覆盖保护细节模型路径
-（常用模型仍用 `FACEHI_ONNX_MODEL`）。
+前端（`app_git_high2.py`）左栏「ONNX 模型档位」下拉可切换档位
+（default / strong / daily / detail 四档全列，缺对应 onnx 文件的档位
+运行时给出友好提示，不影响其它档位）。环境变量
+`FACEHI_ONNX_MODEL_DETAIL` 可覆盖保护细节模型路径（default 档用
+`FACEHI_ONNX_MODEL`，其余档位为 `FACEHI_ONNX_MODEL_{档位大写}`）。
+
+> 注：本模型文件生成于早期脚本，`config_yaml` 只内嵌「保护细节」单模式；
+> 现行 `--preset detail` 重新生成时会同时嵌入三个标准模式（框架与强力档
+> 共用）。两者烘焙的 `mode="保护细节"` 与该模式的全部键值逐键一致，
+> 运行行为相同，故本文件未重导出。
 
 ## 验证记录（本交付包实测）
 
