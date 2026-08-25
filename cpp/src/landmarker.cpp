@@ -4,11 +4,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <opencv2/imgproc.hpp>
 
 namespace hr {
 
 namespace {
+
+// ORT 在 Windows 上的模型路径参数是宽字符（ORTCHAR_T = wchar_t），Linux 上是 char。
+// 经 std::filesystem::path::native() 得到平台原生编码的路径字符串。
+std::filesystem::path::string_type toOrtPath(const std::string& path) {
+    return std::filesystem::path(path).native();
+}
 
 constexpr int kDetectorInput = 128;
 constexpr int kLandmarkInput = 256;
@@ -183,8 +190,9 @@ FaceLandmarkerOrt::FaceLandmarkerOrt(const std::string& modelDir, int numFaces,
                                      float minDetectionConfidence, float minPresenceConfidence)
     : impl_(std::make_unique<Impl>()) {
     impl_->initThresholds(numFaces, minDetectionConfidence, minPresenceConfidence);
-    impl_->det = std::make_unique<Ort::Session>(impl_->env, (modelDir + "/face_detector.onnx").c_str(), impl_->opts);
-    impl_->lmk = std::make_unique<Ort::Session>(impl_->env, (modelDir + "/face_landmarks_detector.onnx").c_str(), impl_->opts);
+    impl_->det = std::make_unique<Ort::Session>(impl_->env, toOrtPath(modelDir + "/face_detector.onnx").c_str(), impl_->opts);
+    impl_->lmk = std::make_unique<Ort::Session>(impl_->env, toOrtPath(modelDir + "/face_landmarks_detector.onnx").c_str(),
+                                                impl_->opts);
     impl_->cacheIoNames();
 }
 

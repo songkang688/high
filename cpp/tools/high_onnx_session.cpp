@@ -9,11 +9,17 @@
 #include <onnxruntime_cxx_api.h>
 
 #include <array>
+#include <filesystem>
 #include <iostream>
 #include <opencv2/imgcodecs.hpp>
 #include <string>
 
 namespace {
+
+// ORT 在 Windows 上的路径参数是宽字符（ORTCHAR_T = wchar_t），Linux 上是 char。
+std::filesystem::path::string_type toOrtPath(const std::string& path) {
+    return std::filesystem::path(path).native();
+}
 
 void printUsage(const char* prog) {
     std::cerr << "用法: " << prog << " --model <high_removal.onnx> --ops <libhigh_removal_ops.so>"
@@ -69,8 +75,8 @@ int main(int argc, char** argv) {
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "high_onnx_session");
         Ort::SessionOptions sessionOptions;
-        sessionOptions.RegisterCustomOpsLibrary(opsPath.c_str());
-        Ort::Session session(env, modelPath.c_str(), sessionOptions);
+        sessionOptions.RegisterCustomOpsLibrary(toOrtPath(opsPath).c_str());
+        Ort::Session session(env, toOrtPath(modelPath).c_str(), sessionOptions);
 
         const std::array<int64_t, 3> shape{image.rows, image.cols, 3};
         const Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
