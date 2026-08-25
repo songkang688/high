@@ -1,32 +1,59 @@
 # facehi_daily.onnx —— 日常/平衡档
 
-独立的单文件去高光模型（**日常版**）：去高光够用，不像常用档（强力向）那么狠，
-也不像「保护细节」取向那么弱。适合日常批量处理证件照时的默认选择。
+独立的单文件去高光模型（**日常版**）：去高光够用，不像强力档那么狠，
+也不像保护细节档那么弱。适合日常批量处理证件照时的默认选择。
 
 ## 基本信息
 
 | 项目 | 值 |
 | --- | --- |
 | 文件 | `git-high2/models/facehi_daily.onnx` |
-| 大小 | 6,280,130 字节（6.28 MB） |
-| SHA-256 | `9d9c7b302384fe47c13714f3c6d756dff26a80f75b9db179099099579b013ee9` |
-| 烘焙 mode | `高保真模式`（节点属性 `mode` 与 YAML `default_mode` 均为该值） |
-| 档位含义 | 检测=正常、修复=正常、method=混合、process_scale=compromise |
-| 内核 | 与 `facehi.onnx` 完全相同的 `ai.facehi:HighlightRemoval` 自定义算子，共用 `lib/libfacehi_custom_ops.so`（Windows 为 `lib/facehi_custom_ops.dll`） |
+| 大小 | 6,283,452 字节（6.28 MB） |
+| SHA-256 | `61ad397c1b07f92a657dc2ab16aa75d328fc26849928e58ead71f047b386ad67` |
+| 烘焙 mode | `日常模式`（节点属性 `mode` 与 YAML `default_mode` 均为该值，指向独立配置段） |
+| 谱系 | facehi（`ai.facehi:HighlightRemoval`），**非** high_removal.onnx |
+| 内核 | 与 `facehi.onnx` 完全相同，共用 `lib/libfacehi_custom_ops.so`（Windows 为 `lib/facehi_custom_ops.dll`），未改任何 C++ |
 | 生成方式 | `python git-high2/onnx/make_facehi_onnx.py --preset daily`（完整仓库内运行） |
 
-「高保真模式」是现有 CLI 三档（常用 / 高保真 / 最高质量）里的中间档：
-高光检测与修复强度都取 `configs/default.yaml` 的「正常」基准
-（修复方法 `mode: 混合`），处理尺度与常用模式一样用 `compromise` 折中档。
-与 `facehi.onnx` 相比，只有烘焙进节点属性的 `mode` / `default_mode` 不同，
-内嵌的人脸检测/关键点子模型、Haar 级联与三种模式的合并配置表逐字节一致。
+## 烘焙参数：强力档与保护细节档的逐项中值
 
-> 提示：在当前预设文件下，「常用模式」的修复参数（强力预设）恰好与
-> `default.yaml` 基准值相同，检测（灵敏预设）与「正常」只差
-> `brow_region_max_fraction`（0.32 vs 0.28）一项上限，因此两档在多数样张上
-> 输出一致，仅当眉区高光占比落在该区间时才会分化。日常档的意义在于
-> **语义上锁定平衡取向**：后续任何一侧预设调整（加强常用档或收敛正常基准）
-> 都会自动体现为两个独立 onnx 的差异，互不影响。
+「日常模式」不是 CLI 既有三档中的任何一档，而是一份独立配置：
+高光检测与修复两段中每个数值键取
+**强力档（`facehi_strong.onnx`，mode=强力模式）与保护细节档
+（`facehi_detail.onnx`，mode=保护细节）两端实际烘焙值的中值**
+（整数参数按 0.5 半进位取整）；`face_detection` / `regions` / `pipeline`
+三段两端一致，直接沿用（`process_scale=compromise`）。
+修复方法保持 `mode: 混合`。
+
+| 参数 | 强力 | **日常** | 细节 |
+| --- | --- | --- | --- |
+| rgb_brightness_threshold | 192 | **205** | 218 |
+| hsv_v_threshold | 178 | **190** | 202 |
+| lab_l_threshold | 178 | **188** | 198 |
+| hsv_s_upper | 158 | **150** | 142 |
+| adaptive_grow_iterations | 16 | **12** | 7 |
+| soft_mask_gain | 1.85 | **1.635** | 1.42 |
+| adaptive_region_delta / core_delta | 3.4 / 5.8 | **5.1 / 8.3** | 6.8 / 10.8 |
+| highlight_min_area / max_area_ratio | 5 / 0.155 | **10 / 0.1225** | 14 / 0.09 |
+| brightness_suppress_strength | 0.97 | **0.825** | 0.68 |
+| final_blend_alpha | 0.99 | **0.905** | 0.82 |
+| poisson_alpha_strength | 0.88 | **0.68** | 0.48 |
+| chroma_restore_strength | 0.42 | **0.30** | 0.18 |
+| texture_preserve_strength | 0.62 | **0.81** | 1.0 |
+| edge_protect_strength | 0.32 | **0.46** | 0.60 |
+| inpainting_radius | 7 | **5** | 3 |
+| max_allowed_modify_area_ratio | 0.24 | **0.165** | 0.09 |
+| max_allowed_mean_brightness_change | 26 | **18** | 10 |
+| max_allowed_local_color_delta | 18 | **13** | 8 |
+| extreme_core_extra_l | 8 | **19** | 30 |
+| faithful_luminance_floor | 0.66 | **0.675** | 0.69 |
+
+其余中值项（检测形态学等）：local_brightness_threshold 6、
+local_contrast_threshold 0.026、saturation_pixel_threshold 244、
+mask_dilate/erode/blur_radius 1/1/9、oil_shine_s_upper 175、
+morph_close_radius 3、forehead/nose_tip/cheek/brow_region_max_fraction
+0.285/0.55/0.20/0.30。完整数值见
+`git-high2/onnx/make_facehi_onnx.py` 的 `DAILY_DETECTION` / `DAILY_REMOVAL`。
 
 ## 用法
 
@@ -48,22 +75,29 @@ result, mask = sess.run(None, {"image": bgr_uint8_hwc})   # uint8 BGR [H,W,3]
 ```
 
 前端 `app_git_high2.py` 左侧「ONNX 模型档位」选
-「facehi_daily.onnx · 日常/平衡」即可；对比页建议与 Python 版「高保真模式」配对。
+「facehi_daily.onnx · 日常/平衡」即可。
 
 ## 验证记录（本分支实测，Ubuntu 24.04 x86-64，onnxruntime 1.29.0 + 仓库自带 so）
 
-1. **全量跑通**：`data/` 全部 17 张 png 走
-   `lib/libfacehi_custom_ops.so` + `facehi_daily.onnx` 完整链路（内置人脸检测），
-   全部成功。热身后单张 0.066–0.428 秒（648×486 至 1448×1086），
-   硬掩码覆盖 1.25%–2.65%，相对原图改动像素 2.57%–4.88%。
-2. **与 Python 参考对齐**：对 `data/1、3、7、12、15.png` 与
-   `cli_process.load_cli_config("高保真模式")` + `process_image` 对拍：
-   MAE ≤ 0.0032、最大像素差 ≤ 10/255、差异像素占比 ≤ 0.504%、
-   PSNR ≥ 71.58 dB、硬掩码 IoU ≥ 0.9966——差异量级与 facehi.onnx↔常用模式的
-   既有基准相同，仅来自两套人脸推理引擎的亚像素关键点噪声。
-3. **烘焙 mode 生效性**：构造探针模型验证内核确实读取节点属性
-   `mode="高保真模式"`——只改内嵌 YAML 中「高保真模式」段的修复参数时输出
-   显著变化（max diff 59/255），只改「常用模式」段时输出逐位不变。
-4. **与 facehi.onnx 的关系**：两模型内嵌子模型/配置表逐字节一致，
-   仅 `mode`/`default_mode`/doc_string 不同；`--preset standard` 生成的
-   模型与仓库已提交的 `facehi.onnx` 在 mode 与 config_yaml 上逐字节一致。
+对 `data/` 全部 17 张 png，用同一 `lib/libfacehi_custom_ops.so` 分别跑
+`facehi.onnx`（常用）、`facehi_daily.onnx`（日常）、`facehi_strong.onnx`（强力）、
+`facehi_detail.onnx`（保护细节）完整链路（内置人脸检测）：
+
+1. **与 facehi.onnx（常用）逐位不同**：17/17 张 max abs diff ≥ 2
+   （实测 19–34/255，硬标准要求 ≥15/17）。
+2. **不贴近强力档**：与 `facehi_strong.onnx` max abs diff ≤ 1 的张数为
+   0/17（实测最小 25/255，硬标准要求 <10）。与 `facehi_detail.onnx`
+   的 max abs diff 为 19–41/255。
+3. **强度有序**：三档硬掩码交集内的 Lab L 均值下降满足
+   强力 ≥ 日常 ≥ 细节，17/17 张（硬标准要求 ≥12/17）。
+   典型值（1.png）：强力 12.86、日常 7.63、细节 3.49；
+   17 张日常档 L 下降范围 5.41–13.11，全部严格落在两端之间。
+4. **与 Python 参考对齐**：把同一份中值配置套到
+   `highlight_removal.pipeline.process_image` 上，对
+   `data/1、3、7、12、15.png` 与 ONNX 对拍：MAE ≤ 0.0009、
+   最大像素差 ≤ 6/255、PSNR ≥ 77.09 dB、硬掩码 IoU ≥ 0.9972
+   （12.png 逐位一致）——差异仅来自两套人脸推理引擎的亚像素关键点噪声。
+5. **内核不变**：与 `facehi.onnx` 内嵌的子模型 / Haar 级联逐字节一致，
+   仅 config_yaml（新增「日常模式」段并指向它）与 doc_string 不同；
+   `--preset standard` 生成的模型与仓库已提交 `facehi.onnx` 在 mode 与
+   config_yaml 上逐字节一致。

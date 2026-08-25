@@ -1,8 +1,8 @@
-	facehi2�面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）。档位：日常/平衡，烘焙 mode=高保真模式（检测=正常、修复=正常、method=混合、process_scale=compromise）:���
-���
+	facehi2�面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）。档位：日常/平衡，烘焙 mode=日常模式（强力/保护细节两端中值：检测阈值 rgb205/hsv_v190/lab_l188、grow 12、soft_mask_gain 1.635；修复压制 0.825、final_blend 0.905；method=混合、process_scale=compromise）:���
+���
 image
-	landmarksresulthighlight_maskfacehi_highlight_removal"HighlightRemoval*�I
-config_yaml"�Hdefault_mode: 高保真模式
+	landmarksresulthighlight_maskfacehi_highlight_removal"HighlightRemoval*�a
+config_yaml"�adefault_mode: 日常模式
 modes:
   常用模式:
     face_detection:
@@ -279,6 +279,99 @@ modes:
       extreme_core_extra_l: 10
     pipeline:
       process_scale: 1.0
+      enable_roi_removal: true
+      roi_padding_ratio: 0.12
+      refine_upsampled_masks: false
+      enable_visualization: false
+  日常模式:
+    face_detection:
+      face_detection_confidence: 0.5
+      landmark_detection_confidence: 0.5
+      enable_mediapipe: true
+      enable_fallback_detector: true
+      max_faces: 4
+      low_confidence_warning_threshold: 0.65
+      multi_face_strategy: 最大人脸
+      manual_face_index: 0
+      enable_alignment: false
+      show_landmark_index: false
+      mediapipe_task_model_path: models/face_landmarker.task
+      lbf_model_path: models/lbfmodel.yaml
+      haar_scale_factor: 1.08
+      haar_min_neighbors: 5
+      allow_weak_fallback_for_debug: false
+    regions:
+      nose_bridge_expand_ratio: 0.145
+      nose_tip_expand_ratio: 0.96
+      forehead_height_ratio: 1.54
+      cheek_expand_ratio: 1.1
+      chin_expand_ratio: 1.04
+      protect_expand_radius: 5
+      eye_protect_extra_radius: 1.0
+      simple_protect_mode: true
+      key_region_detection_mode: false
+      protect_brows: true
+      brow_protect_shrink_radius: 0
+      brow_protect_height_ratio: 2.3
+      brow_protect_width_ratio: 1.6
+      brow_vertical_shift_ratio: 0.0
+      brow_ridge_height_ratio: 0.82
+      lip_protect_shrink_radius: 2
+      philtrum_unprotect: true
+      philtrum_width_ratio: 0.16
+      skin_mask_smooth_radius: 4
+      face_contour_shrink_ratio: 0.018
+    highlight_detection:
+      rgb_brightness_threshold: 205
+      hsv_v_threshold: 190
+      hsv_s_upper: 150
+      lab_l_threshold: 188
+      local_brightness_threshold: 6
+      local_contrast_threshold: 0.026
+      saturation_pixel_threshold: 244
+      highlight_min_area: 10
+      highlight_max_area_ratio: 0.1225
+      mask_dilate_radius: 1
+      mask_erode_radius: 1
+      mask_blur_radius: 9
+      oil_shine_s_upper: 175
+      adaptive_region_delta: 5.1
+      adaptive_core_delta: 8.3
+      adaptive_halo_percentile: 78
+      adaptive_core_percentile: 90
+      adaptive_grow_iterations: 12
+      relative_saturation_drop: -8.0
+      morph_close_radius: 3
+      soft_mask_gain: 1.635
+      local_sigma: 6.0
+      large_local_sigma: 28.0
+      local_skin_chroma_delta_upper: 42
+      fallback_seed_percentile: 93
+      max_component_expand_ratio: 1.35
+      forehead_region_max_fraction: 0.285
+      nose_bridge_region_max_fraction: 0.72
+      nose_tip_region_max_fraction: 0.55
+      cheek_region_max_fraction: 0.2
+      skin_region_max_fraction: 0.35
+      chin_region_max_fraction: 0.24
+      philtrum_region_max_fraction: 0.32
+      brow_region_max_fraction: 0.3
+    highlight_removal:
+      mode: 混合
+      brightness_suppress_strength: 0.825
+      chroma_restore_strength: 0.3
+      texture_preserve_strength: 0.81
+      edge_protect_strength: 0.46
+      inpainting_radius: 5
+      poisson_alpha_strength: 0.68
+      final_blend_alpha: 0.905
+      max_allowed_modify_area_ratio: 0.165
+      max_allowed_mean_brightness_change: 18
+      max_allowed_local_color_delta: 13
+      faithful_luminance_floor: 0.675
+      extreme_core_extra_l: 19
+    pipeline:
+      process_scale: compromise
       enable_roi_removal: true
       roi_padding_ratio: 0.12
       refine_upsampled_masks: false
@@ -42239,8 +42332,8 @@ Identity_2
 B
  B
 
-ai.onnx.ml�*
-mode"高保真模式�2�整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写。烘焙档位：日常/平衡（mode=高保真模式，检测=正常、修复=正常、method=混合、process_scale=compromise）:	ai.facehifacehi* B	landmarksJ R�facehi 单一 ONNX 入口（日常/平衡档，烘焙 mode=高保真模式）。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。Z
+ai.onnx.ml�*
+mode"日常模式�2�整条面部去高光流水线：BlazeFace 检测→478点关键点→分区→高光检测→修复→保护回写。烘焙档位：日常/平衡（mode=日常模式，强力/保护细节两端中值：检测阈值 rgb205/hsv_v190/lab_l188、grow 12、soft_mask_gain 1.635；修复压制 0.825、final_blend 0.905；method=混合、process_scale=compromise）:	ai.facehifacehi* B	landmarksJ R�facehi 单一 ONNX 入口（日常/平衡档，烘焙 mode=日常模式）。输入 image：uint8 BGR [H,W,3]（与 cv2.imread 一致）；输出 result：uint8 BGR 同形状，highlight_mask：uint8 [H,W]。必须注册 libfacehi_custom_ops 自定义算子库后才能创建会话。Z
 image
 Z
 	landmarks

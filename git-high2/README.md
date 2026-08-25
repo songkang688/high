@@ -20,7 +20,7 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 | 文件 | 档位 | 烘焙 mode | 特点 |
 | --- | --- | --- | --- |
 | `models/facehi.onnx` | 常用（强力向） | 常用模式 | 检测=灵敏、修复=强力，默认档 |
-| `models/facehi_daily.onnx` | **日常/平衡** | 高保真模式 | 检测=正常、修复=正常、method=混合、process_scale=compromise；去高光够用且更收敛，详见 `models/DAILY.md` |
+| `models/facehi_daily.onnx` | **日常/平衡** | 日常模式（独立中值配置） | 高光检测与修复各参数取强力档与保护细节档两端烘焙值的中值（rgb 阈值 205、修复压制 0.825、final_blend 0.905 等）；method=混合、process_scale=compromise，详见 `models/DAILY.md` |
 
 重新生成：`python git-high2/onnx/make_facehi_onnx.py --preset daily`
 （`--preset standard` 对应 facehi.onnx；需在完整仓库内运行）。
@@ -42,7 +42,7 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 git-high2/
 ├── README.md                 # 本文件
 ├── models/facehi.onnx        # 常用档（强力向）对外模型
-├── models/facehi_daily.onnx  # 日常/平衡档（烘焙 高保真模式，见 models/DAILY.md）
+├── models/facehi_daily.onnx  # 日常/平衡档（烘焙独立「日常模式」中值配置，见 models/DAILY.md）
 ├── models/DAILY.md           # 日常/平衡档说明与验证记录
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
 ├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
@@ -210,8 +210,9 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 | `result` | 输出 | uint8 | 同 `image` | 去高光结果 BGR |
 | `highlight_mask` | 输出 | uint8 | `[H,W]` | 最终硬掩码 |
 
-模式：`facehi.onnx` 烘焙「常用模式」，`facehi_daily.onnx` 烘焙「高保真模式」
-（日常/平衡）。两者接口完全相同；需要其它档位可在仓库内用
+模式：`facehi.onnx` 烘焙「常用模式」，`facehi_daily.onnx` 烘焙独立的
+「日常模式」（日常/平衡，强力档与保护细节档的逐项中值配置）。两者接口
+完全相同；需要其它档位可在仓库内用
 `git-high2/onnx/make_facehi_onnx.py --preset <名称>` 重新生成。
 
 ## 验证记录（本交付包实测）

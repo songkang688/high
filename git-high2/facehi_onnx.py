@@ -3,8 +3,9 @@
 
 本目录（git-high2/）自包含运行 ONNX 版所需的一切：
 - models/facehi.onnx                常用档（强力向；内嵌子模型与配置，约 6.3MB）
-- models/facehi_daily.onnx          日常/平衡档（烘焙 高保真模式：检测=正常、
-                                    修复=正常、method=混合、process_scale=compromise，
+- models/facehi_daily.onnx          日常/平衡档（烘焙独立「日常模式」：高光检测与
+                                    修复各参数取强力档与保护细节档两端的中值，
+                                    method=混合、process_scale=compromise，
                                     详见 models/DAILY.md）
 - lib/libfacehi_custom_ops.so       ORT 自定义算子库（两个模型共用同一内核；
                                     必须注册，ORT 设计如此；未提供时可按
@@ -40,7 +41,8 @@ _LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib",
               "facehi_custom_ops.dll", "libfacehi_custom_ops.dll")
 
 # 模型档位：None=常用（强力向，facehi.onnx）；"daily"=日常/平衡（facehi_daily.onnx，
-# 烘焙 高保真模式，见 models/DAILY.md）。所有档位共用同一自定义算子库。
+# 烘焙独立「日常模式」强力/细节中值配置，见 models/DAILY.md）。
+# 所有档位共用同一自定义算子库。
 MODEL_VARIANTS = {None: "facehi.onnx", "daily": "facehi_daily.onnx"}
 
 
@@ -101,7 +103,8 @@ class FacehiOnnx:
     """持有 facehi*.onnx 会话；可复用以摊薄模型加载时间。
 
     variant=None 加载常用档 facehi.onnx；variant="daily" 加载日常/平衡档
-    facehi_daily.onnx（烘焙 高保真模式）。model_path 显式给出时忽略 variant。
+    facehi_daily.onnx（烘焙独立「日常模式」中值配置）。
+    model_path 显式给出时忽略 variant。
     """
 
     def __init__(self, model_path=None, ops_lib=None, intra_op_threads: int = 0,
@@ -151,7 +154,8 @@ def remove_highlight(image, save_to=None, return_mask: bool = False,
     """一行调用去高光。image 可以是图片路径或 uint8 BGR ndarray。
 
     variant=None 用常用档 facehi.onnx；variant="daily" 用日常/平衡档
-    facehi_daily.onnx（烘焙 高保真模式，去高光够用且更收敛，见 models/DAILY.md）。
+    facehi_daily.onnx（烘焙独立「日常模式」——强力档与保护细节档的逐项中值，
+    去高光介于两者之间，见 models/DAILY.md）。
     返回结果 BGR ndarray；return_mask=True 时返回 (result, highlight_mask)。
     save_to 提供时把结果 PNG/JPG 写盘（中文路径安全）。
     """

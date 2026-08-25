@@ -5,8 +5,8 @@
   - Python 版：highlight_removal.pipeline.process_image + cli_process.load_cli_config
     （常用模式 / 高保真模式 / 最高质量模式；需要在仓库内运行）
   - ONNX 版：git-high2/models/facehi.onnx（常用/强力向）或
-    facehi_daily.onnx（日常/平衡，烘焙 高保真模式）+ libfacehi_custom_ops
-    单会话推理（会话按档位懒加载并缓存）
+    facehi_daily.onnx（日常/平衡，烘焙独立「日常模式」中值配置）
+    + libfacehi_custom_ops 单会话推理（会话按档位懒加载并缓存）
   - 对比：同一份解码数组同时跑两条链路，四宫格（原图 / Python / ONNX / 放大差分）
     并给出 MAE / 最大像素差 / 差异像素占比 / PSNR / 硬掩码 IoU / 两边耗时
 
@@ -95,8 +95,8 @@ DEFAULT_ONNX_VARIANT_LABEL = next(iter(ONNX_VARIANT_CHOICES))
 
 ONNX_MODE_NOTE = (
     "处理模式仅对 Python 版生效；ONNX 输出取决于下方「ONNX 模型档位」——"
-    "facehi.onnx 烘焙常用模式（强力向），facehi_daily.onnx 烘焙高保真模式"
-    "（日常/平衡），切换处理模式不会改变 ONNX 输出。"
+    "facehi.onnx 烘焙常用模式（强力向），facehi_daily.onnx 烘焙独立的日常模式"
+    "（日常/平衡，强力/细节中值配置），切换处理模式不会改变 ONNX 输出。"
 )
 
 BUILD_HELP_MD = """**未找到自定义算子库 `libfacehi_custom_ops.so`。** ONNX 版需要先编译一次（详见 `git-high2/README.md` 与 `cpp/README.md`）：
@@ -332,7 +332,7 @@ def ui_run_onnx(image_path, _mode_name, variant_label):
     if cached is not None and cached["load_seconds"] is not None:
         load_note = f" ｜ 会话加载 {cached['load_seconds']:.2f} 秒（仅首次）"
     variant_note = (
-        "facehi_daily.onnx 内嵌高保真模式（日常/平衡）" if variant == "daily"
+        "facehi_daily.onnx 内嵌日常模式（日常/平衡，强力/细节中值）" if variant == "daily"
         else "facehi.onnx 内嵌常用模式（强力向）"
     )
     report = (
@@ -610,7 +610,7 @@ def build_app() -> gr.Blocks:
                 "# git-high2 · 证件照去高光 · Python / ONNX 对比工作台\n"
                 "同一套去高光算法的两种交付形态：Python 原始流水线（MediaPipe + OpenCV）"
                 "与单文件模型 `facehi.onnx`（常用/强力向）/ `facehi_daily.onnx`"
-                "（日常/平衡，烘焙 高保真模式）——均为 `ai.facehi:HighlightRemoval` "
+                "（日常/平衡，独立中值配置）——均为 `ai.facehi:HighlightRemoval` "
                 "自定义算子、内嵌子模型与配置，共用同一算子库。"
                 "支持 jpg / png / bmp / webp，中文路径可用。"
             )
@@ -640,8 +640,9 @@ def build_app() -> gr.Blocks:
                     choices=list(ONNX_VARIANT_CHOICES),
                     value=DEFAULT_ONNX_VARIANT_LABEL,
                     label="ONNX 模型档位",
-                    info="日常/平衡档去高光够用且更收敛；与 Python 版对比时建议"
-                         "「日常/平衡 ↔ 高保真模式」「常用 ↔ 常用模式」配对。",
+                    info="日常/平衡档为强力/保护细节两端的中值配置，去高光强度"
+                         "介于两者之间；ONNX 内嵌独立日常模式，对比页建议与"
+                         "「常用 ↔ 常用模式」同口径解读。",
                 )
                 gr.Markdown(_env_status_md(), elem_classes=["hl-note"])
 
