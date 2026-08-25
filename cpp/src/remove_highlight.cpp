@@ -12,25 +12,49 @@ namespace facehi {
 
 namespace {
 
-// 对应 _edge_protected_alpha：返回 float32 [0,1]。
-cv::Mat edge_protected_alpha(const cv::Mat& image_bgr, const cv::Mat& soft_mask,
-                             double edge_strength) {
-  cv::Mat alpha = normalize_mask(soft_mask);
-  if (edge_strength <= 0) return alpha;
+// 对应 _edge_protected_alpha。
+//
+// numpy 2（NEP 50）dtype 语义：np.clip(edge_strength,0,1) 是强类型 np.float64
+// 标量，会把 `alpha * (1.0 - es * edges)` 整条链提升到 float64；
+// 而 edge_strength<=0 时直接返回 normalize_mask 的 float32。
+// 为了逐位对齐，这里统一用 CV_64F 承载数值，并用 promoted 标记 Python 侧
+// 实际 dtype，后续 α 链按该 dtype 选择 float32/float64 舍入路径。
+struct AlphaMap {
+  cv::Mat a64;    // CV_64F
+  bool promoted;  // true：Python 侧为 float64
+};
+
+AlphaMap edge_protected_alpha(const cv::Mat& image_bgr, const cv::Mat& soft_mask,
+                              double edge_strength) {
+  cv::Mat alpha32 = normalize_mask(soft_mask);
+  AlphaMap out;
+  out.promoted = edge_strength > 0;
+  out.a64.create(alpha32.size(), CV_64F);
+  if (!out.promoted) {
+    for (int y = 0; y < alpha32.rows; ++y) {
+      const float* a = alpha32.ptr<float>(y);
+      double* o = out.a64.ptr<double>(y);
+      for (int x = 0; x < alpha32.cols; ++x) o[x] = static_cast<double>(a[x]);
+    }
+    return out;
+  }
   cv::Mat gray, edges_u8, edges_blur;
   cv::cvtColor(image_bgr, gray, cv::COLOR_BGR2GRAY);
   cv::Canny(gray, edges_u8, 60, 130);
   cv::GaussianBlur(edges_u8, edges_blur, cv::Size(5, 5), 0);
-  float es = static_cast<float>(std::clamp(edge_strength, 0.0, 1.0));
-  for (int y = 0; y < alpha.rows; ++y) {
-    float* a = alpha.ptr<float>(y);
+  double es = std::clamp(edge_strength, 0.0, 1.0);
+  for (int y = 0; y < alpha32.rows; ++y) {
+    const float* a = alpha32.ptr<float>(y);
     const uint8_t* e = edges_blur.ptr<uint8_t>(y);
-    for (int x = 0; x < alpha.cols; ++x) {
-      float ev = static_cast<float>(e[x]) / 255.0f;
-      a[x] = std::clamp(a[x] * (1.0f - es * ev), 0.0f, 1.0f);
+    double* o = out.a64.ptr<double>(y);
+    for (int x = 0; x < alpha32.cols; ++x) {
+      // edges.astype(np.float32)/255.0 先在 float32 舍入，再提升 float64。
+      float ev32 = static_cast<float>(e[x]) / 255.0f;
+      double v = static_cast<double>(a[x]) * (1.0 - es * static_cast<double>(ev32));
+      o[x] = std::clamp(v, 0.0, 1.0);
     }
   }
-  return alpha;
+  return out;
 }
 
 // 对应 _inpaint_lab_reference：返回 float32 3 通道 Lab。
@@ -69,6 +93,12 @@ cv::Mat inpaint_lab_reference(const cv::Mat& image_bgr, const cv::Mat& hard_mask
 }
 
 // 对应 _faithful_suppress。
+//
+// dtype 语义严格对齐 numpy 2（NEP 50）：
+// - Python 标量（yaml 读出的 float）是弱类型 → 与 float32 数组运算保持 float32；
+// - np.clip(标量) / 0.16*np.clip(...) 是 np.float64 强标量 → texture_keep、
+//   target_L 以及（edge_strength>0 时）α 链、最终混合都在 float64 里算，
+//   只在写回 out_lab(float32) 时舍入一次。
 cv::Mat faithful_suppress(const cv::Mat& image_bgr, const cv::Mat& hard_mask,
                           const cv::Mat& soft_mask, const Params& params) {
   double brightness_strength = params.getd("brightness_suppress_strength", 0.74);
@@ -80,7 +110,7 @@ cv::Mat faithful_suppress(const cv::Mat& image_bgr, const cv::Mat& hard_mask,
   double luminance_floor = params.getd("faithful_luminance_floor", 0.86);
 
   const int h = image_bgr.rows, w = image_bgr.cols;
-  cv::Mat alpha0 = edge_protected_alpha(image_bgr, soft_mask, edge_strength);
+  AlphaMap alpha0 = edge_protected_alpha(image_bgr, soft_mask, edge_strength);
 
   cv::Mat lab_u8, lab;
   cv::cvtColor(image_bgr, lab_u8, cv::COLOR_BGR2Lab);
@@ -95,17 +125,18 @@ cv::Mat faithful_suppress(const cv::Mat& image_bgr, const cv::Mat& hard_mask,
 
   cv::Mat low;
   cv::GaussianBlur(L, low, cv::Size(0, 0), 2.2);
-  // Python 先在双精度算 0.16*clip(ts)，再与 float32 数组相乘。
-  float tex_gain = static_cast<float>(0.16 * std::clamp(texture_strength, 0.0, 1.0));
+  // 0.16 * np.clip(ts, 0, 1) → np.float64 强标量，texture_keep 为 float64。
+  double tex_gain = 0.16 * std::clamp(texture_strength, 0.0, 1.0);
 
   double local_sigma = params.getd("local_sigma", 6.0);
   cv::Mat local_skin;
   cv::GaussianBlur(L, local_skin, cv::Size(0, 0), std::max(8.0, local_sigma * 1.6));
 
-  float bs = static_cast<float>(brightness_strength);
-  float cs = static_cast<float>(color_strength);
-  float fa = static_cast<float>(final_alpha);
-  float lf = static_cast<float>(luminance_floor);
+  const bool promoted = alpha0.promoted;
+  float bs32 = static_cast<float>(brightness_strength);
+  float cs32 = static_cast<float>(color_strength);
+  float fa32 = static_cast<float>(final_alpha);
+  float lf32 = static_cast<float>(luminance_floor);
 
   cv::Mat out_lab(h, w, CV_32FC3);
   for (int y = 0; y < h; ++y) {
@@ -117,20 +148,40 @@ cv::Mat faithful_suppress(const cv::Mat& image_bgr, const cv::Mat& hard_mask,
     const float* prB = ref_ch[2].ptr<float>(y);
     const float* plow = low.ptr<float>(y);
     const float* pls = local_skin.ptr<float>(y);
-    const float* pa0 = alpha0.ptr<float>(y);
+    const double* pa0 = alpha0.a64.ptr<double>(y);
     cv::Vec3f* po = out_lab.ptr<cv::Vec3f>(y);
     for (int x = 0; x < w; ++x) {
-      float alpha_l = std::clamp(pa0[x] * bs * fa, 0.0f, 1.0f);
-      float alpha_c = std::clamp(pa0[x] * cs * fa, 0.0f, 1.0f);
-      float texture = pL[x] - plow[x];
-      float texture_keep = texture * tex_gain;
-      float min_allowed = std::max(pL[x] * lf, pls[x] * 0.93f);
-      float target_L = std::max(prL[x] + texture_keep, min_allowed);
-      target_L = std::max(target_L, pls[x] - 5.0f);
-      target_L = std::min(target_L, pL[x] + 0.5f);
-      po[x][0] = pL[x] * (1.0f - alpha_l) + target_L * alpha_l;
-      po[x][1] = pA[x] * (1.0f - alpha_c) + prA[x] * alpha_c;
-      po[x][2] = pB[x] * (1.0f - alpha_c) + prB[x] * alpha_c;
+      // texture_keep = (L - low)(f32) * tex_gain(f64) → float64
+      float texture32 = pL[x] - plow[x];
+      double texture_keep = static_cast<double>(texture32) * tex_gain;
+      // min_allowed = max(L*lf, ls*0.93)：弱标量 → float32
+      float min_allowed32 = std::max(pL[x] * lf32, pls[x] * 0.93f);
+      // target_L：float64（texture_keep 提升所致）
+      double target_L = std::max(static_cast<double>(prL[x]) + texture_keep,
+                                 static_cast<double>(min_allowed32));
+      target_L = std::max(target_L, static_cast<double>(pls[x] - 5.0f));
+      target_L = std::min(target_L, static_cast<double>(pL[x] + 0.5f));
+
+      if (promoted) {
+        // α 链 float64：alpha0(f64) * 弱标量 → float64
+        double alpha_l = std::clamp(pa0[x] * brightness_strength * final_alpha, 0.0, 1.0);
+        double alpha_c = std::clamp(pa0[x] * color_strength * final_alpha, 0.0, 1.0);
+        po[x][0] = static_cast<float>(static_cast<double>(pL[x]) * (1.0 - alpha_l) +
+                                      target_L * alpha_l);
+        po[x][1] = static_cast<float>(static_cast<double>(pA[x]) * (1.0 - alpha_c) +
+                                      static_cast<double>(prA[x]) * alpha_c);
+        po[x][2] = static_cast<float>(static_cast<double>(pB[x]) * (1.0 - alpha_c) +
+                                      static_cast<double>(prB[x]) * alpha_c);
+      } else {
+        // α 链 float32；但 target_L 仍是 float64，L*(1-αl)+target_L*αl 提升 float64
+        float a32 = static_cast<float>(pa0[x]);
+        float alpha_l = std::clamp(a32 * bs32 * fa32, 0.0f, 1.0f);
+        float alpha_c = std::clamp(a32 * cs32 * fa32, 0.0f, 1.0f);
+        double part_keep = static_cast<double>(pL[x] * (1.0f - alpha_l));
+        po[x][0] = static_cast<float>(part_keep + target_L * static_cast<double>(alpha_l));
+        po[x][1] = pA[x] * (1.0f - alpha_c) + prA[x] * alpha_c;
+        po[x][2] = pB[x] * (1.0f - alpha_c) + prB[x] * alpha_c;
+      }
     }
   }
 
@@ -148,11 +199,16 @@ cv::Mat faithful_suppress(const cv::Mat& image_bgr, const cv::Mat& hard_mask,
 
   cv::Mat result(h, w, CV_8UC3);
   for (int y = 0; y < h; ++y) {
-    const float* pa0 = alpha0.ptr<float>(y);
+    const double* pa0 = alpha0.a64.ptr<double>(y);
     const cv::Vec3b* src = image_bgr.ptr<cv::Vec3b>(y);
     const cv::Vec3b* mod = out_bgr.ptr<cv::Vec3b>(y);
     cv::Vec3b* po = result.ptr<cv::Vec3b>(y);
-    for (int x = 0; x < w; ++x) po[x] = (pa0[x] <= 0.001f) ? src[x] : mod[x];
+    for (int x = 0; x < w; ++x) {
+      // keep = alpha0 <= 0.001：promoted 时 float64 比较，否则 float32 比较。
+      bool keep = promoted ? (pa0[x] <= 0.001)
+                           : (static_cast<float>(pa0[x]) <= 0.001f);
+      po[x] = keep ? src[x] : mod[x];
+    }
   }
   return result;
 }
