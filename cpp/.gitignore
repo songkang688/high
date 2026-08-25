@@ -1,0 +1,7 @@
+# 构建目录整体忽略，但保留 build/windows/ 下提交的 Windows 自定义算子 DLL
+# （由 .github/workflows/windows-dll.yml 在 windows-latest 上构建，体积小、静态链接 OpenCV/yaml-cpp）。
+build/*
+!build/windows/
+build/windows/*
+!build/windows/*.dll
+!build/windows/README.md

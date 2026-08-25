@@ -12,6 +12,11 @@ runtime_outputs/
 *.log
 models/lbfmodel.yaml
 models/*.onnx
+# 从 face_landmarker.task 导出的 ONNX（见 tools/export_landmarker_onnx.py），体积小，纳入版本管理
+!models/face_detector.onnx
+!models/face_landmarks_detector.onnx
+# 单文件交付模型（见 tools/export_high_removal_onnx.py），用户直接调用的最终产物，纳入版本管理
+!models/high_removal.onnx
 
 # OS / IDE
 .DS_Store
