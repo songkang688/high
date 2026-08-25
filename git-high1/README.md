@@ -1,8 +1,18 @@
-# git-high1 · 证件照去高光便携包（最佳效果 ONNX + 前端 + 调用脚本）
+# git-high1 · 证件照去高光便携包（三档强度 ONNX + 前端 + 调用脚本）
 
-本目录是 `high` 仓库的**自包含可运行子集**：单文件模型 `models/high_removal.onnx`
-（内嵌两个人脸网络与 `configs/default.yaml`）+ 工作室前端 `app_studio.py` +
-命令行调用脚本 `tools/run_high_onnx.py`，以及运行所需的算子库与示例图。
+本目录是 `high` 仓库的**自包含可运行子集**：四个单文件模型（每个都内嵌两个人脸网络
+与各自的 yaml 配置）+ 工作室前端 `app_studio.py` + 命令行调用脚本
+`tools/run_high_onnx.py`，以及运行所需的算子库与示例图。
+
+三档去油光强度预设（独立实测对比见仓库 `tools/THREE_ONNX_AUDIT.md`）：
+
+| 预设 | 模型 | 内嵌配置 | 效果 |
+|------|------|---------|------|
+| 强力 | `models/high_removal_strong.onnx` | `configs/onnx_strong.yaml` | 去油光最强（皮肤 L≥200 亮斑消减最多） |
+| 日常（默认） | `models/high_removal_daily.onnx` | `configs/onnx_daily.yaml` | = 当前 `default.yaml` 平衡效果，输出与 `high_removal.onnx` 逐位相同 |
+| 保护细节 | `models/high_removal_detail.onnx` | `configs/onnx_detail.yaml` | 去油光最弱、保留更多皮肤纹理（掩码内 \|ΔL\| 最低） |
+
+`models/high_removal.onnx`（内嵌 `configs/default.yaml`）继续保留，输出与日常档逐位相同。
 
 在本机（cloud agent VM）上已安装到以下位置，可直接取用：
 
@@ -20,11 +30,14 @@
 ```
 git-high1/
   README.md                # 本文件
-  app_studio.py            # 前端：Python / ONNX / 对比 三种引擎的工作室页面
-  tools/run_high_onnx.py   # 命令行调用入口（session.run 示例，零仓库依赖）
-  models/high_removal.onnx       # 单文件模型（内嵌人脸网络 + 默认配置，5.1 MB）
-  models/face_landmarker.task    # MediaPipe 人脸模型（精确内核 / Python 引擎需要）
-  configs/*.yaml           # default.yaml 与工作室用到的预设
+  app_studio.py            # 前端：强力/日常/保护细节 预设 × Python / ONNX / 对比 三种引擎
+  tools/run_high_onnx.py   # 命令行调用入口（session.run 示例，零仓库依赖，--preset 选强度）
+  models/high_removal.onnx         # 单文件模型（内嵌人脸网络 + default.yaml，5.1 MB）
+  models/high_removal_strong.onnx  # 强力档（内嵌 onnx_strong.yaml，5.1 MB）
+  models/high_removal_daily.onnx   # 日常档（内嵌 onnx_daily.yaml，5.1 MB；= default 效果）
+  models/high_removal_detail.onnx  # 保护细节档（内嵌 onnx_detail.yaml，5.1 MB）
+  models/face_landmarker.task      # MediaPipe 人脸模型（精确内核 / Python 引擎需要）
+  configs/*.yaml           # default.yaml + 三档预设 onnx_{strong,daily,detail}.yaml 等
   highlight_removal/       # Python 包（精确内核经它调用原始流水线 process_image）
   cpp/build/libhigh_removal_pyops.so  # 精确内核（效果最好：与 Python 逐位一致）
   cpp/build/libhigh_removal_ops.so    # C++ 快速内核（无 Python/MediaPipe 依赖）
@@ -59,14 +72,19 @@ HIGH_STUDIO_HOST=0.0.0.0 HIGH_STUDIO_PORT=8080 python app_studio.py   # 改地�
 HIGH_ONNX_KERNEL=cpp python app_studio.py                             # ONNX 侧改用 C++ 快速内核
 ```
 
-页面提供三种引擎：**Python**（MediaPipe + OpenCV 原始链路）、**ONNX**（单文件模型 +
-自定义算子库）、**对比**（同图并排跑两个引擎，显示差异热力图与 MAE/PSNR/IoU 指标）。
+页面提供三档强度预设（**强力 / 日常 / 保护细节**，默认日常；Python 引擎自动加载对应
+yaml，对比模式两侧参数一致）× 三种引擎：**Python**（MediaPipe + OpenCV 原始链路）、
+**ONNX**（所选预设的单文件模型 + 自定义算子库）、**对比**（同图并排跑两个引擎，
+显示差异热力图与 MAE/PSNR/IoU 指标）。
 
 ## 命令行调用
 
 ```bash
 cd /home/ubuntu/git-high1
-python tools/run_high_onnx.py -i data/1.png -o out.png                # 精确内核（默认）
+python tools/run_high_onnx.py -i data/1.png -o out.png                # 精确内核（默认配置）
+python tools/run_high_onnx.py --preset strong -i data/1.png -o out.png  # 强力档
+python tools/run_high_onnx.py --preset daily -i data/1.png -o out.png   # 日常档（= 默认效果）
+python tools/run_high_onnx.py --preset detail -i data/1.png -o out.png  # 保护细节档
 python tools/run_high_onnx.py --kernel cpp -i data/1.png -o out.png   # C++ 快速内核
 python tools/run_high_onnx.py -i data/1.png -o out.png --mask mask.png  # 另存高光硬掩码
 ```
@@ -84,6 +102,9 @@ so.register_custom_ops_library("cpp/build/libhigh_removal_pyops.so")  # 或 libh
 sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
 result, hard_mask = sess.run(["result", "hard_mask"], {"image": cv2.imread("data/1.png")})
 ```
+
+换强度档只需换模型文件名：`models/high_removal_strong.onnx` /
+`models/high_removal_daily.onnx` / `models/high_removal_detail.onnx`（配置已各自内嵌）。
 
 接口：输入 `image` uint8 `[H, W, 3]`（BGR，`cv2.imread` 原样，H/W 动态）；
 输出 `result` uint8 `[H, W, 3]`（去高光结果）、`hard_mask` uint8 `[H, W]`（高光硬掩码）。

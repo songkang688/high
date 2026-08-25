@@ -18,8 +18,16 @@
     sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
     result = sess.run(["result"], {"image": bgr_uint8_hwc})[0]
 
+三档去油光强度预设（--preset，三个模型都内嵌各自的 configs/onnx_*.yaml，
+实测对比见 tools/THREE_ONNX_AUDIT.md）：
+  strong = models/high_removal_strong.onnx（去油光最强）
+  daily  = models/high_removal_daily.onnx（= 当前 default.yaml 平衡效果）
+  detail = models/high_removal_detail.onnx（保护细节，保留更多皮肤纹理）
+不给 --preset / --model 时用 models/high_removal.onnx（默认配置，与 daily 输出逐位相同）。
+
 用法：
   python tools/run_high_onnx.py --input data/1.png --output out.png [--mask mask.png]
+  python tools/run_high_onnx.py --preset strong --input data/1.png --output out.png
   python tools/run_high_onnx.py --kernel cpp --input data/1.png --output out.png
   python tools/run_high_onnx.py --ops /path/to/lib.so --input data/1.png --output out.png
 """
@@ -60,6 +68,13 @@ def find_kernel_lib(kernel: str) -> Path:
 
 KERNEL_LIBS = {kernel: find_kernel_lib(kernel) for kernel in KERNEL_FILES}
 
+# 三档强度预设 → 单文件模型（各自内嵌 configs/onnx_<preset>.yaml）。
+PRESET_MODELS = {
+    "strong": ROOT / "models" / "high_removal_strong.onnx",
+    "daily": ROOT / "models" / "high_removal_daily.onnx",
+    "detail": ROOT / "models" / "high_removal_detail.onnx",
+}
+
 
 def create_session(model_path: str | Path, ops_library: str | Path) -> ort.InferenceSession:
     so = ort.SessionOptions()
@@ -76,7 +91,10 @@ def remove_highlight(session: ort.InferenceSession, image_bgr: np.ndarray) -> tu
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", default=str(ROOT / "models" / "high_removal.onnx"))
+    parser.add_argument("--model", default=None,
+                        help="单文件模型路径（显式指定时覆盖 --preset；默认 models/high_removal.onnx）")
+    parser.add_argument("--preset", choices=sorted(PRESET_MODELS), default=None,
+                        help="强度预设：strong = 强力 / daily = 日常 / detail = 保护细节")
     parser.add_argument("--kernel", choices=["exact", "cpp"], default="exact",
                         help="内核选择：exact = 精确内核（与 Python 逐位一致，默认）；cpp = C++ 快速内核")
     parser.add_argument("--ops", default=None,
@@ -86,6 +104,15 @@ def main() -> int:
     parser.add_argument("--mask", default=None, help="可选：另存高光硬掩码")
     args = parser.parse_args()
 
+    if args.model:
+        model = Path(args.model)
+    elif args.preset:
+        model = PRESET_MODELS[args.preset]
+    else:
+        model = ROOT / "models" / "high_removal.onnx"
+    if not model.is_file():
+        raise SystemExit(f"[错误] 找不到模型文件: {model}")
+
     ops = Path(args.ops) if args.ops else KERNEL_LIBS[args.kernel]
     if not ops.is_file():
         searched = "、".join(str(d / KERNEL_FILES[args.kernel]) for d in KERNEL_SEARCH_DIRS)
@@ -94,7 +121,7 @@ def main() -> int:
     if image is None:
         raise SystemExit(f"[错误] 图片读取失败: {args.input}")
 
-    session = create_session(args.model, ops)
+    session = create_session(model, ops)
     result, hard_mask = remove_highlight(session, image)
 
     if not cv2.imwrite(args.output, result):

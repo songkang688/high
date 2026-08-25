@@ -1,8 +1,16 @@
 """证件照去高光 · Python / ONNX 工作室（推荐 UI：引擎切换 + 并排对比）。
 
-三种引擎模式（均使用 configs/default.yaml 同一套默认参数，保证公平对比）：
-  - Python：highlight_removal.pipeline.process_image（MediaPipe + OpenCV 原始链路）；
-  - ONNX  ：models/high_removal.onnx + 自定义算子库（配置已内嵌模型，单次 session.run）。
+三档强度预设（选择哪档，两个引擎就用哪档的同一套参数，保证公平对比）：
+  - 强力    ：models/high_removal_strong.onnx + configs/onnx_strong.yaml（去油光最强）；
+  - 日常    ：models/high_removal_daily.onnx + configs/onnx_daily.yaml（默认；= 当前
+              default.yaml 平衡效果，输出与现有 high_removal.onnx 逐位相同）；
+  - 保护细节：models/high_removal_detail.onnx + configs/onnx_detail.yaml（保留更多皮肤纹理）。
+  实测对比见 tools/THREE_ONNX_AUDIT.md。
+
+三种引擎模式：
+  - Python：highlight_removal.pipeline.process_image（MediaPipe + OpenCV 原始链路，
+            配置 = 所选预设的 yaml）；
+  - ONNX  ：所选预设的单文件模型 + 自定义算子库（对应 yaml 已内嵌模型，单次 session.run）。
             默认精确内核 libhigh_removal_pyops.so（与 Python 引擎逐位一致，MAE 恒为 0）；
             设 HIGH_ONNX_KERNEL=cpp 切换 C++ 快速内核 libhigh_removal_ops.so（存在亚像素级浮点尾差）；
   - 对比  ：同一张图同时跑两个引擎，并排显示 原图 / Python / ONNX、差异热力图与量化指标。
@@ -40,7 +48,6 @@ from highlight_removal.utils import apply_runtime_mode, load_yaml
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "runtime_outputs"
-CONFIG_PATH = ROOT / "configs" / "default.yaml"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 ENGINE_PYTHON = "Python"
@@ -48,22 +55,37 @@ ENGINE_ONNX = "ONNX"
 ENGINE_COMPARE = "对比"
 ENGINES = [ENGINE_PYTHON, ENGINE_ONNX, ENGINE_COMPARE]
 
-_config_cache: Optional[Dict[str, Any]] = None
+# 三档强度预设：预设名 → (单文件 ONNX 模型, 对应 yaml)。模型内嵌的 config_yaml 与该 yaml
+# 逐字节一致（tools/three_onnx_audit.py 实测），因此 Python 引擎读 yaml、ONNX 引擎用模型，
+# 精确内核下两个引擎输出逐位相同，对比模式公平。
+PRESET_STRONG = "强力"
+PRESET_DAILY = "日常"
+PRESET_DETAIL = "保护细节"
+PRESETS: Dict[str, tuple] = {
+    PRESET_STRONG: (ROOT / "models" / "high_removal_strong.onnx", ROOT / "configs" / "onnx_strong.yaml"),
+    PRESET_DAILY: (ROOT / "models" / "high_removal_daily.onnx", ROOT / "configs" / "onnx_daily.yaml"),
+    PRESET_DETAIL: (ROOT / "models" / "high_removal_detail.onnx", ROOT / "configs" / "onnx_detail.yaml"),
+}
+DEFAULT_PRESET = PRESET_DAILY
+
+_config_cache: Dict[str, Dict[str, Any]] = {}
 _landmarker_ready = False
 
 
 # --------------------------------------------------------------------------- 配置与引擎
 
-def studio_config() -> Dict[str, Any]:
-    """configs/default.yaml + 运行时线程配置。关闭调试可视化（工作室不需要，计时也更公平）。"""
-    global _config_cache
-    if _config_cache is None:
-        cfg = load_yaml(CONFIG_PATH)
+def studio_config(preset: str = DEFAULT_PRESET) -> Dict[str, Any]:
+    """所选预设的 yaml + 运行时线程配置。关闭调试可视化（工作室不需要，计时也更公平）。"""
+    if preset not in PRESETS:
+        preset = DEFAULT_PRESET
+    cfg = _config_cache.get(preset)
+    if cfg is None:
+        cfg = load_yaml(PRESETS[preset][1])
         cfg["runtime"] = apply_runtime_mode(DEFAULT_RUNTIME_MODE)
         cfg.setdefault("pipeline", {})
         cfg["pipeline"]["enable_visualization"] = False
-        _config_cache = cfg
-    return _config_cache
+        _config_cache[preset] = cfg
+    return cfg
 
 
 def ensure_landmarker(cfg: Dict[str, Any]) -> None:
@@ -79,8 +101,8 @@ def ensure_landmarker(cfg: Dict[str, Any]) -> None:
     _landmarker_ready = True
 
 
-def run_python_engine(image_bgr: np.ndarray) -> Dict[str, Any]:
-    cfg = studio_config()
+def run_python_engine(image_bgr: np.ndarray, preset: str = DEFAULT_PRESET) -> Dict[str, Any]:
+    cfg = studio_config(preset)
     ensure_landmarker(cfg)
     t0 = time.perf_counter()
     out = process_image(image_bgr, cfg)
@@ -95,8 +117,9 @@ def run_python_engine(image_bgr: np.ndarray) -> Dict[str, Any]:
     }
 
 
-def run_onnx_engine(image_bgr: np.ndarray) -> Dict[str, Any]:
-    session = onnx_session.get_session()  # 惰性单例，会话构建不计入耗时
+def run_onnx_engine(image_bgr: np.ndarray, preset: str = DEFAULT_PRESET) -> Dict[str, Any]:
+    model_path = PRESETS.get(preset, PRESETS[DEFAULT_PRESET])[0]
+    session = onnx_session.get_session(model_path=model_path)  # 惰性单例，会话构建不计入耗时
     t0 = time.perf_counter()
     result, hard_mask = onnx_session.remove_highlight(image_bgr, session)
     elapsed = time.perf_counter() - t0
@@ -141,6 +164,7 @@ def compare_metrics_markdown(
     iou: float,
     py_elapsed: float,
     onnx_elapsed: float,
+    preset: str = DEFAULT_PRESET,
 ) -> str:
     lines = [
         "| 对比项 | MAE (/255) | 最大像素差 | 差异像素占比 | PSNR (dB) |",
@@ -152,19 +176,21 @@ def compare_metrics_markdown(
         f"高光硬掩码 IoU（Python vs ONNX）：**{iou:.4f}** ｜ "
         f"耗时：Python **{py_elapsed:.2f}s** · ONNX **{onnx_elapsed:.2f}s**",
         "",
-        "两引擎均使用 configs/default.yaml 同一套默认参数（ONNX 侧配置已内嵌模型）。"
+        f"两引擎均使用「{preset}」预设的同一套参数（Python 读 {PRESETS.get(preset, PRESETS[DEFAULT_PRESET])[1].name}，"
+        "ONNX 侧同一配置已内嵌模型）。"
         f"当前 ONNX 内核：{'精确内核（与 Python 逐位一致，Python − ONNX 应为 0）' if onnx_session.selected_kernel() == onnx_session.KERNEL_EXACT else 'C++ 快速内核（存在亚像素级浮点尾差）'}。"
         "热力图按各自峰值归一，峰值见「最大像素差」列。",
     ]
     return "\n".join(lines)
 
 
-def single_metrics_markdown(engine: str, out: Dict[str, Any], m_orig: Dict[str, float]) -> str:
+def single_metrics_markdown(engine: str, preset: str, out: Dict[str, Any], m_orig: Dict[str, float]) -> str:
     mask_pct = float((out["hard_mask"] > 0).mean() * 100.0)
     lines = [
         "| 指标 | 数值 |",
         "|---|---|",
         f"| 引擎 | {engine} |",
+        f"| 强度预设 | {preset} |",
         f"| 耗时 | {out['elapsed']:.2f} s |",
         f"| 高光硬掩码面积占比 | {mask_pct:.2f}% |",
         f"| 修改像素占比（vs 原图） | {m_orig['diff_pixel_pct']:.3f}% |",
@@ -208,7 +234,7 @@ def _to_rgb(image_bgr: np.ndarray) -> np.ndarray:
 
 # --------------------------------------------------------------------------- 主处理
 
-def run_studio(engine: str, image_rgb: Optional[np.ndarray]):
+def run_studio(engine: str, preset: str, image_rgb: Optional[np.ndarray]):
     """输出顺序：状态、单引擎 4 图、对比 6 图、指标面板。未涉及的组件用 gr.skip() 保持不动。"""
     skip_single = [gr.skip()] * 4
     skip_cmp = [gr.skip()] * 6
@@ -219,17 +245,17 @@ def run_studio(engine: str, image_rgb: Optional[np.ndarray]):
     orig_rgb = _to_rgb(image_bgr)
     try:
         if engine == ENGINE_COMPARE:
-            py = run_python_engine(image_bgr)
-            onnx = run_onnx_engine(image_bgr)
+            py = run_python_engine(image_bgr, preset)
+            onnx = run_onnx_engine(image_bgr, preset)
             m_cross = diff_metrics(py["result"], onnx["result"])
             m_py = diff_metrics(image_bgr, py["result"])
             m_onnx = diff_metrics(image_bgr, onnx["result"])
             iou = mask_iou(py["hard_mask"], onnx["hard_mask"])
             metrics_md = compare_metrics_markdown(
-                m_cross, m_py, m_onnx, iou, py["elapsed"], onnx["elapsed"]
+                m_cross, m_py, m_onnx, iou, py["elapsed"], onnx["elapsed"], preset
             )
             status = (
-                f"对比完成：Python {py['elapsed']:.2f}s，ONNX {onnx['elapsed']:.2f}s，"
+                f"对比完成（{preset}）：Python {py['elapsed']:.2f}s，ONNX {onnx['elapsed']:.2f}s，"
                 f"MAE(Python vs ONNX) {m_cross['mae']:.4f}/255。"
             )
             if py["warnings"]:
@@ -247,9 +273,9 @@ def run_studio(engine: str, image_rgb: Optional[np.ndarray]):
             ]
 
         run_engine = run_python_engine if engine == ENGINE_PYTHON else run_onnx_engine
-        out = run_engine(image_bgr)
+        out = run_engine(image_bgr, preset)
         m_orig = diff_metrics(image_bgr, out["result"])
-        status = f"{engine} 引擎处理完成，耗时 {out['elapsed']:.2f}s。"
+        status = f"{engine} 引擎（{preset}）处理完成，耗时 {out['elapsed']:.2f}s。"
         if out["warnings"]:
             status += "\n警告：" + "；".join(out["warnings"])
         return [
@@ -259,7 +285,7 @@ def run_studio(engine: str, image_rgb: Optional[np.ndarray]):
             out["hard_mask"],
             diff_heatmap_rgb(image_bgr, out["result"]),
             *skip_cmp,
-            single_metrics_markdown(engine, out, m_orig),
+            single_metrics_markdown(engine, preset, out, m_orig),
         ]
     except onnx_session.OnnxEngineUnavailable as exc:
         return [f"ONNX 引擎不可用：\n{exc}", *skip_single, *skip_cmp, gr.skip()]
@@ -297,7 +323,7 @@ def build_app() -> gr.Blocks:
     with gr.Blocks(title="证件照去高光 · Python / ONNX 工作室") as demo:
         gr.Markdown(
             "## 证件照去高光 · Python / ONNX 工作室\n"
-            "同一套默认参数（configs/default.yaml）下切换或并排对比两个推理引擎。",
+            "选择去油光强度预设后，两个引擎使用该预设的同一套参数，可切换或并排对比。",
             elem_id="studio-header",
         )
         engine = gr.Radio(
@@ -308,6 +334,17 @@ def build_app() -> gr.Blocks:
                 "Python = MediaPipe + OpenCV 原始链路；ONNX = 单文件模型 + 自定义算子库"
                 "（默认精确内核，与 Python 逐位一致；HIGH_ONNX_KERNEL=cpp 切换 C++ 快速内核）；"
                 "对比 = 两者同时运行并量化差异"
+            ),
+        )
+        preset = gr.Radio(
+            choices=list(PRESETS),
+            value=DEFAULT_PRESET,
+            label="去油光强度预设",
+            info=(
+                "强力 = high_removal_strong.onnx（去油光最强）；"
+                "日常 = high_removal_daily.onnx（默认，等于当前 default.yaml 平衡效果）；"
+                "保护细节 = high_removal_detail.onnx（保留更多皮肤纹理，改动最小）。"
+                "Python 引擎自动加载对应 yaml，对比模式两侧参数一致。实测见 tools/THREE_ONNX_AUDIT.md"
             ),
         )
         with gr.Row():
@@ -365,7 +402,7 @@ def build_app() -> gr.Blocks:
         ]
         engine.change(on_engine_change, inputs=[engine], outputs=[single_group, compare_group])
         sample_dd.change(load_sample, inputs=[sample_dd], outputs=[input_image])
-        run_btn.click(run_studio, inputs=[engine, input_image], outputs=outputs)
+        run_btn.click(run_studio, inputs=[engine, preset, input_image], outputs=outputs)
     return demo
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 导出 git-high1 便携包（最佳效果单文件 ONNX + studio 前端 + 调用脚本）到目标目录。
+# 导出 git-high1 便携包（三档强度单文件 ONNX + studio 前端 + 调用脚本）到目标目录。
 #
 # 用法：
 #   bash tools/export_git_high1.sh [目标目录]          # 默认 /home/ubuntu/git-high1
@@ -33,7 +33,11 @@ mkdir -p "$DEST/tools" "$DEST/models" "$DEST/configs" "$DEST/data" "$DEST/cpp/bu
 cp "$REPO/git-high1/README.md" "$DEST/README.md"
 cp "$REPO/app_studio.py" "$DEST/app_studio.py"
 cp "$REPO/tools/run_high_onnx.py" "$DEST/tools/run_high_onnx.py"
-cp "$REPO/models/high_removal.onnx" "$REPO/models/face_landmarker.task" "$DEST/models/"
+cp "$REPO/models/high_removal.onnx" \
+   "$REPO/models/high_removal_strong.onnx" \
+   "$REPO/models/high_removal_daily.onnx" \
+   "$REPO/models/high_removal_detail.onnx" \
+   "$REPO/models/face_landmarker.task" "$DEST/models/"
 cp "$REPO/configs/"*.yaml "$DEST/configs/"
 cp "$EXACT_SO" "$CPP_SO" "$DEST/cpp/build/"
 # Windows 预编译 DLL（.github/workflows/windows-dll.yml 产物，提交在 cpp/build/windows/）：
