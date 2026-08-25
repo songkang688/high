@@ -86,16 +86,21 @@ DIFF_BASE_CHOICES = ["Python vs ONNX", "原图 vs Python", "原图 vs ONNX"]
 DEFAULT_DIFF_GAIN = 4  # 与 highlight_removal.pipeline 差分图风格一致：clip(absdiff * 4)
 
 # ONNX 档位 = 独立 onnx 文件（档位烘焙在图节点属性里，加载后不可切换）。
-# 标签 → facehi_onnx.MODEL_VARIANTS 里的档位别名；只展示 models/ 下实际存在的文件。
+# 四档统一下拉；缺文件的档位标注「未提供」仍可见，选中时报清晰错误
+# （文件可通过对应分支交付或 FACEHI_ONNX_MODEL_* 环境变量补齐）。
 _ONNX_VARIANT_LABELS = [
     ("facehi.onnx（默认 · 常用模式）", "default"),
     ("facehi_strong.onnx（强力 · 去高光最狠）", "strong"),
+    ("facehi_daily.onnx（日常 · 折中）", "daily"),
+    ("facehi_detail.onnx（保护细节 · 最轻）", "detail"),
 ]
-ONNX_VARIANT_BY_LABEL = {
-    label: variant for label, variant in _ONNX_VARIANT_LABELS
-    if find_model(variant) is not None
-}
-ONNX_VARIANT_CHOICES = list(ONNX_VARIANT_BY_LABEL) or ["facehi.onnx（默认 · 常用模式）"]
+ONNX_VARIANT_BY_LABEL = {}
+ONNX_VARIANT_CHOICES = []
+for _label, _variant in _ONNX_VARIANT_LABELS:
+    if find_model(_variant) is None:
+        _label = f"{_label.rstrip('）')} · 未提供）"
+    ONNX_VARIANT_BY_LABEL[_label] = _variant
+    ONNX_VARIANT_CHOICES.append(_label)
 DEFAULT_ONNX_VARIANT_LABEL = ONNX_VARIANT_CHOICES[0]
 
 ONNX_MODE_NOTE = (
@@ -170,10 +175,11 @@ def get_onnx_wrapper(variant: str = "default") -> FacehiOnnx:
             return cached["wrapper"]
         if find_model(variant) is None:
             name = MODEL_VARIANTS.get(variant, variant)
+            env_suffix = "" if variant == "default" else f"_{variant.upper()}"
             raise OnnxUnavailableError(
-                f"未找到模型 `git-high2/models/{name}`，"
-                "请确认整夹拷贝时包含 models/ 子目录，"
-                "或设置环境变量 FACEHI_ONNX_MODEL 指向模型文件。"
+                f"未找到模型 `git-high2/models/{name}`（档位：{variant}）。"
+                "该档位文件可能未随当前分支提供；请补齐文件到 models/ 子目录，"
+                f"或设置环境变量 `FACEHI_ONNX_MODEL{env_suffix}` 指向模型文件。"
             )
         if find_ops_lib() is None:
             raise OnnxUnavailableError(BUILD_HELP_MD)
@@ -628,7 +634,8 @@ def build_app() -> gr.Blocks:
                     choices=ONNX_VARIANT_CHOICES,
                     value=DEFAULT_ONNX_VARIANT_LABEL,
                     label="ONNX 模型档位（独立 onnx 文件，档位烘焙在图内）",
-                    info="强力版=facehi_strong.onnx：去高光最狠、细节保护最少。",
+                    info="强力=去高光最狠；日常=折中；保护细节=最轻。"
+                         "标注「未提供」的档位缺模型文件，选中会提示补齐方式。",
                 )
                 gr.Markdown(_env_status_md(), elem_classes=["hl-note"])
 

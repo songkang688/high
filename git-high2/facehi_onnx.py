@@ -3,9 +3,14 @@
 
 本目录（git-high2/）自包含运行 ONNX 版所需的一切：
 - models/facehi.onnx                默认模型（烘焙常用模式，内嵌子模型与配置，约 6.3MB）
-- models/facehi_strong.onnx         强力版（三独立档位之一：去高光最狠、细节保护最少）
+- models/facehi_strong.onnx         强力版（去高光最狠、细节保护最少）
+- models/facehi_daily.onnx          日常版（另一分支交付；缺文件时该档位不可用）
+- models/facehi_detail.onnx         保护细节版（另一分支交付；缺文件时该档位不可用）
 - lib/libfacehi_custom_ops.so       ORT 自定义算子库（必须注册，ORT 设计如此；
                                     未提供时可按 README.md / cpp/ 里的说明自行编译）
+
+档位环境变量覆盖：FACEHI_ONNX_MODEL（default）、
+FACEHI_ONNX_MODEL_STRONG / _DAILY / _DETAIL（对应档位）。
 
 最简用法::
 
@@ -36,31 +41,42 @@ _HERE = Path(__file__).resolve().parent
 _LIB_NAMES = ("libfacehi_custom_ops.so", "libfacehi_custom_ops.dylib",
               "facehi_custom_ops.dll", "libfacehi_custom_ops.dll")
 
-# 档位别名 → 模型文件名。"default" 即 models/facehi.onnx（烘焙常用模式）；
-# "strong" 为强力版；日常版 / 保护细节版由各自分支补充。
+# 档位别名 → 模型文件名（四档统一 registry，作为各分支合并基准）。
+# "default" 即 models/facehi.onnx（烘焙常用模式）；本分支只交付 strong 的
+# 模型文件，daily / detail 文件由各自分支交付——缺文件时 find_model 返回 None。
 MODEL_VARIANTS = {
     "default": "facehi.onnx",
     "strong": "facehi_strong.onnx",
+    "daily": "facehi_daily.onnx",
+    "detail": "facehi_detail.onnx",
+}
+
+# 分档环境变量覆盖：default 用 FACEHI_ONNX_MODEL（历史行为不变），
+# 其余档位用 FACEHI_ONNX_MODEL_{STRONG,DAILY,DETAIL}。
+_MODEL_ENV_VARS = {
+    "default": "FACEHI_ONNX_MODEL",
+    "strong": "FACEHI_ONNX_MODEL_STRONG",
+    "daily": "FACEHI_ONNX_MODEL_DAILY",
+    "detail": "FACEHI_ONNX_MODEL_DETAIL",
 }
 
 
 def find_model(variant: str | None = None) -> Path | None:
-    """定位模型文件。
+    """定位模型文件；缺文件返回 None。
 
-    variant 为空：环境变量 FACEHI_ONNX_MODEL 优先，其次 git-high2/models/facehi.onnx。
-    variant 非空：可以是 MODEL_VARIANTS 里的档位别名（如 "strong"），
-    也可以直接给文件名（如 "facehi_strong.onnx"），在 git-high2/models/ 下查找。
+    variant 为空视同 "default"。variant 可以是 MODEL_VARIANTS 里的档位别名
+    （default / strong / daily / detail），也可以直接给文件名
+    （如 "facehi_strong.onnx"），在 git-high2/models/ 下查找。
+    档位别名支持环境变量覆盖（见 _MODEL_ENV_VARS），环境变量优先于本地文件。
     """
-    if variant:
-        name = MODEL_VARIANTS.get(variant, variant)
-        for cand in (_HERE / "models" / name, _HERE / name):
-            if cand.is_file():
-                return cand
-        return None
-    env = os.environ.get("FACEHI_ONNX_MODEL")
-    if env and Path(env).is_file():
-        return Path(env)
-    for cand in (_HERE / "models" / "facehi.onnx", _HERE / "facehi.onnx"):
+    key = variant or "default"
+    env_name = _MODEL_ENV_VARS.get(key)
+    if env_name:
+        env = os.environ.get(env_name)
+        if env and Path(env).is_file():
+            return Path(env)
+    name = MODEL_VARIANTS.get(key, key)
+    for cand in (_HERE / "models" / name, _HERE / name):
         if cand.is_file():
             return cand
     return None
@@ -117,9 +133,13 @@ class FacehiOnnx:
         model = Path(model_path) if model_path else find_model(variant)
         lib = Path(ops_lib) if ops_lib else find_ops_lib()
         if model is None or not model.is_file():
+            key = variant or "default"
+            env_name = _MODEL_ENV_VARS.get(key, "FACEHI_ONNX_MODEL")
+            name = MODEL_VARIANTS.get(key, key)
             raise FileNotFoundError(
-                f"找不到模型（variant={variant or 'default'}），请设置 FACEHI_ONNX_MODEL "
-                "或传入 model_path（正常情况下应位于 git-high2/models/facehi*.onnx）")
+                f"找不到模型（variant={key}，期望 git-high2/models/{name}）。"
+                f"该档位文件可能未随本分支交付；请补齐文件、设置环境变量 {env_name} "
+                "指向模型，或传入 model_path。")
         if lib is None or not lib.is_file():
             raise FileNotFoundError(
                 "找不到 libfacehi_custom_ops 自定义算子库，请设置 FACEHI_ORT_CUSTOM_OPS "

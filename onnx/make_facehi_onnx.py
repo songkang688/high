@@ -47,8 +47,13 @@ CONFIG_SECTIONS = ("face_detection", "regions", "highlight_detection",
                    "highlight_removal", "pipeline")
 
 # ---------------------------------------------------------------------------
-# 独立档位预设（每个预设 = 基准标准模式 + 少量差异项，烘焙为一个新 mode）。
-# 本文件当前实现强力版；日常版 / 保护细节版由各自分支补充各自的 preset。
+# 独立档位预设 registry（每个预设 = 基准标准模式 + 少量差异项，烘焙为一个新 mode）。
+# --preset 的 argparse choices 直接取自本 dict 的键：新增档位只需往 PRESETS
+# 里加一个条目（结构同 strong：mode_name / base_mode / default_out /
+# overrides / doc），无需改动 parse_args / main。
+# 本分支实现 "strong"；"daily" / "detail" 槽位预留给各自分支补充：
+#   "daily":  {"mode_name": ..., "base_mode": ..., "default_out": "facehi_daily.onnx", ...}
+#   "detail": {"mode_name": ..., "base_mode": ..., "default_out": "facehi_detail.onnx", ...}
 # ---------------------------------------------------------------------------
 
 # 强力版：基准就是现有「常用模式」（检测=灵敏、修复=强力、method=混合、
