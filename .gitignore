@@ -26,3 +26,6 @@ Thumbs.db
 .idea/
 .vscode/
 _github_upload/
+
+# 实验输出（大文件不入库）
+experiments/out/
