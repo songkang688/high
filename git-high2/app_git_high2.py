@@ -4,8 +4,9 @@
 三种工作模式（顶部标签切换）：
   - Python 版：highlight_removal.pipeline.process_image + cli_process.load_cli_config
     （常用模式 / 高保真模式 / 最高质量模式；需要在仓库内运行）
-  - ONNX 版：git-high2/models/facehi.onnx + libfacehi_custom_ops 单会话推理
-    （会话全局懒加载并缓存；模型内嵌配置，等同常用模式）
+  - ONNX 版：git-high2/models/facehi.onnx（常用/强力向）或
+    facehi_daily.onnx（日常/平衡，烘焙 高保真模式）+ libfacehi_custom_ops
+    单会话推理（会话按档位懒加载并缓存）
   - 对比：同一份解码数组同时跑两条链路，四宫格（原图 / Python / ONNX / 放大差分）
     并给出 MAE / 最大像素差 / 差异像素占比 / PSNR / 硬掩码 IoU / 两边耗时
 
@@ -84,9 +85,18 @@ DEFAULT_MODE = "常用模式"
 DIFF_BASE_CHOICES = ["Python vs ONNX", "原图 vs Python", "原图 vs ONNX"]
 DEFAULT_DIFF_GAIN = 4  # 与 highlight_removal.pipeline 差分图风格一致：clip(absdiff * 4)
 
+# ONNX 模型档位：每档一个独立 onnx 文件，共用同一自定义算子库，
+# 差别只在烘焙进节点属性的 mode（见 models/DAILY.md）。
+ONNX_VARIANT_CHOICES = {
+    "facehi.onnx · 常用（强力向）": None,
+    "facehi_daily.onnx · 日常/平衡": "daily",
+}
+DEFAULT_ONNX_VARIANT_LABEL = next(iter(ONNX_VARIANT_CHOICES))
+
 ONNX_MODE_NOTE = (
-    "处理模式仅对 Python 版生效；facehi.onnx 内嵌常用模式合并配置，"
-    "切换模式不会改变 ONNX 输出。"
+    "处理模式仅对 Python 版生效；ONNX 输出取决于下方「ONNX 模型档位」——"
+    "facehi.onnx 烘焙常用模式（强力向），facehi_daily.onnx 烘焙高保真模式"
+    "（日常/平衡），切换处理模式不会改变 ONNX 输出。"
 )
 
 BUILD_HELP_MD = """**未找到自定义算子库 `libfacehi_custom_ops.so`。** ONNX 版需要先编译一次（详见 `git-high2/README.md` 与 `cpp/README.md`）：
@@ -144,26 +154,33 @@ class OnnxUnavailableError(RuntimeError):
 
 
 _ONNX_LOCK = threading.Lock()
-_ONNX_CACHE: Dict[str, Any] = {"wrapper": None, "load_seconds": None}
+_ONNX_CACHE: Dict[Any, Dict[str, Any]] = {}  # variant -> {"wrapper", "load_seconds"}
 
 
-def get_onnx_wrapper() -> FacehiOnnx:
+def _variant_from_label(label: Optional[str]):
+    return ONNX_VARIANT_CHOICES.get(label or DEFAULT_ONNX_VARIANT_LABEL)
+
+
+def get_onnx_wrapper(variant: Optional[str] = None) -> FacehiOnnx:
     if ort is None:
         raise OnnxUnavailableError("未安装 onnxruntime，请先执行：`pip install onnxruntime`")
     with _ONNX_LOCK:
-        if _ONNX_CACHE["wrapper"] is not None:
-            return _ONNX_CACHE["wrapper"]
-        if find_model() is None:
+        cached = _ONNX_CACHE.get(variant)
+        if cached is not None:
+            return cached["wrapper"]
+        if find_model(variant) is None:
+            expect = "facehi_daily.onnx" if variant == "daily" else "facehi.onnx"
             raise OnnxUnavailableError(
-                "未找到模型 `git-high2/models/facehi.onnx`，"
+                f"未找到模型 `git-high2/models/{expect}`，"
                 "请确认整夹拷贝时包含 models/ 子目录，"
                 "或设置环境变量 FACEHI_ONNX_MODEL 指向模型文件。"
             )
         if find_ops_lib() is None:
             raise OnnxUnavailableError(BUILD_HELP_MD)
         t0 = time.perf_counter()
-        wrapper = FacehiOnnx()
-        _ONNX_CACHE.update(wrapper=wrapper, load_seconds=time.perf_counter() - t0)
+        wrapper = FacehiOnnx(variant=variant)
+        _ONNX_CACHE[variant] = {"wrapper": wrapper,
+                                "load_seconds": time.perf_counter() - t0}
         return wrapper
 
 
@@ -190,8 +207,8 @@ def _run_python(bgr: np.ndarray, mode_name: str):
     return out, time.perf_counter() - t0
 
 
-def _run_onnx(bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
-    wrapper = get_onnx_wrapper()
+def _run_onnx(bgr: np.ndarray, variant: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, float]:
+    wrapper = get_onnx_wrapper(variant)
     t0 = time.perf_counter()
     result, mask = wrapper.run(bgr)
     return result, mask, time.perf_counter() - t0
@@ -299,10 +316,11 @@ def ui_run_python(image_path, mode_name):
     return _bgr_to_rgb(out.result_bgr), _mask_rgb(out.highlight_mask), report
 
 
-def ui_run_onnx(image_path, _mode_name):
+def ui_run_onnx(image_path, _mode_name, variant_label):
     bgr = _decode_input(image_path)
+    variant = _variant_from_label(variant_label)
     try:
-        result, mask, elapsed = _run_onnx(bgr)
+        result, mask, elapsed = _run_onnx(bgr, variant)
     except OnnxUnavailableError as exc:
         return None, None, str(exc)
     except Exception as exc:  # noqa: BLE001 —— 会话内部错误按原因展示，不静默崩溃
@@ -310,10 +328,15 @@ def ui_run_onnx(image_path, _mode_name):
     h, w = bgr.shape[:2]
     saved = _save_result("onnx_result", result)
     load_note = ""
-    if _ONNX_CACHE["load_seconds"] is not None:
-        load_note = f" ｜ 会话加载 {_ONNX_CACHE['load_seconds']:.2f} 秒（仅首次）"
+    cached = _ONNX_CACHE.get(variant)
+    if cached is not None and cached["load_seconds"] is not None:
+        load_note = f" ｜ 会话加载 {cached['load_seconds']:.2f} 秒（仅首次）"
+    variant_note = (
+        "facehi_daily.onnx 内嵌高保真模式（日常/平衡）" if variant == "daily"
+        else "facehi.onnx 内嵌常用模式（强力向）"
+    )
     report = (
-        f"**耗时 {elapsed:.3f} 秒** ｜ 配置：facehi.onnx 内嵌常用模式 ｜ "
+        f"**耗时 {elapsed:.3f} 秒** ｜ 配置：{variant_note} ｜ "
         f"输出 {w}×{h} ｜ 已保存 `{saved}`{load_note}"
     )
     return _bgr_to_rgb(result), _mask_rgb(mask), report
@@ -366,8 +389,9 @@ def ui_update_diff(state, diff_base, diff_gain, diff_auto):
     return _bgr_to_rgb(diff_img), note
 
 
-def ui_run_compare(image_path, mode_name, diff_base, diff_gain, diff_auto):
+def ui_run_compare(image_path, mode_name, variant_label, diff_base, diff_gain, diff_auto):
     bgr = _decode_input(image_path)
+    variant = _variant_from_label(variant_label)
     orig_rgb = _bgr_to_rgb(bgr)
     state: Dict[str, Any] = {"orig": bgr, "py": None, "onnx": None}
     notes: list[str] = []
@@ -392,10 +416,11 @@ def ui_run_compare(image_path, mode_name, diff_base, diff_gain, diff_auto):
     onnx_rgb = None
     onnx_error_md = None
     try:
-        onnx_result, onnx_mask, t_onnx = _run_onnx(bgr)
+        onnx_result, onnx_mask, t_onnx = _run_onnx(bgr, variant)
         state["onnx"] = onnx_result
         onnx_rgb = _bgr_to_rgb(onnx_result)
-        notes.append("ONNX：耗时 {:.3f} 秒（内嵌常用配置）".format(t_onnx))
+        onnx_cfg = "facehi_daily.onnx，日常/平衡" if variant == "daily" else "facehi.onnx，常用/强力向"
+        notes.append(f"ONNX：耗时 {t_onnx:.3f} 秒（{onnx_cfg}）")
     except OnnxUnavailableError as exc:
         onnx_error_md = str(exc)
         notes.append("ONNX：不可用（见下方说明）")
@@ -513,6 +538,7 @@ label span, .block label { font-size: 13px !important; color: var(--hl-dim) !imp
 
 def _env_status_md() -> str:
     model_path = find_model()
+    daily_path = find_model("daily")
     ops_path = find_ops_lib()
     if ops_path is not None:
         try:
@@ -525,13 +551,18 @@ def _env_status_md() -> str:
         f"已就绪（{model_path.stat().st_size / 1e6:.1f} MB）"
         if model_path is not None else "缺失"
     )
+    daily_text = (
+        f"已就绪（{daily_path.stat().st_size / 1e6:.1f} MB）"
+        if daily_path is not None else "缺失"
+    )
     ort_text = ort.__version__ if ort is not None else "未安装（`pip install onnxruntime`）"
     py_text = "已就绪（完整仓库）" if PY_PIPELINE_ERROR is None else "不可用（独立目录运行）"
     return (
         "**运行环境**\n\n"
         f"onnxruntime：{ort_text}\n\n"
         f"OpenCV：{cv2.__version__} ｜ Gradio：{gr.__version__}\n\n"
-        f"单文件模型 `models/facehi.onnx`：{model_text}\n\n"
+        f"常用档 `models/facehi.onnx`：{model_text}\n\n"
+        f"日常/平衡档 `models/facehi_daily.onnx`：{daily_text}\n\n"
         f"自定义算子库：{ops_text}\n\n"
         f"Python 原始流水线：{py_text}"
     )
@@ -578,8 +609,10 @@ def build_app() -> gr.Blocks:
             gr.Markdown(
                 "# git-high2 · 证件照去高光 · Python / ONNX 对比工作台\n"
                 "同一套去高光算法的两种交付形态：Python 原始流水线（MediaPipe + OpenCV）"
-                "与单文件模型 `git-high2/models/facehi.onnx`（`ai.facehi:HighlightRemoval` "
-                "自定义算子，内嵌子模型与配置）。支持 jpg / png / bmp / webp，中文路径可用。"
+                "与单文件模型 `facehi.onnx`（常用/强力向）/ `facehi_daily.onnx`"
+                "（日常/平衡，烘焙 高保真模式）——均为 `ai.facehi:HighlightRemoval` "
+                "自定义算子、内嵌子模型与配置，共用同一算子库。"
+                "支持 jpg / png / bmp / webp，中文路径可用。"
             )
 
         with gr.Row():
@@ -602,6 +635,13 @@ def build_app() -> gr.Blocks:
                     value=DEFAULT_MODE,
                     label="处理模式",
                     info=ONNX_MODE_NOTE,
+                )
+                onnx_variant_dd = gr.Dropdown(
+                    choices=list(ONNX_VARIANT_CHOICES),
+                    value=DEFAULT_ONNX_VARIANT_LABEL,
+                    label="ONNX 模型档位",
+                    info="日常/平衡档去高光够用且更收敛；与 Python 版对比时建议"
+                         "「日常/平衡 ↔ 高保真模式」「常用 ↔ 常用模式」配对。",
                 )
                 gr.Markdown(_env_status_md(), elem_classes=["hl-note"])
 
@@ -658,12 +698,12 @@ def build_app() -> gr.Blocks:
         )
         onnx_btn.click(
             ui_run_onnx,
-            inputs=[input_image, mode_radio],
+            inputs=[input_image, mode_radio, onnx_variant_dd],
             outputs=[onnx_result, onnx_mask, onnx_report],
         )
         cmp_btn.click(
             ui_run_compare,
-            inputs=[input_image, mode_radio, diff_base, diff_gain, diff_auto],
+            inputs=[input_image, mode_radio, onnx_variant_dd, diff_base, diff_gain, diff_auto],
             outputs=[cmp_orig, cmp_py, cmp_onnx, cmp_diff, cmp_diff_note, cmp_metrics, cmp_report, cmp_state],
         )
         diff_inputs = [cmp_state, diff_base, diff_gain, diff_auto]
