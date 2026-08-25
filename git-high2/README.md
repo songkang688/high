@@ -23,12 +23,20 @@ Copy-Item -Recurse git-high2 "$env:USERPROFILE\git-high2"
 - 不要改用 `models/high_removal.onnx`：那是另一条谱系，与 Python 对齐更差。
 - 不要默认启用 `experimental_better.yaml`：只对纹理优先场景有收益。
 
+另提供**保护细节版** `models/facehi_detail.onnx`（约 6.27MB，同一自定义算子
+与同一个 `.so`/`.dll`，仅烘焙配置不同：`mode=保护细节`）：五官/皮肤纹理尽量
+保留、改动像素更少、眼鼻嘴保护区更干净，代价是去高光故意弱一点（高光残留
+可略多）。适合轻中度油光、要求皮肤质感的场景；参数组合、验证记录见
+`models/DETAIL.md`。
+
 ## 目录结构
 
 ```
 git-high2/
 ├── README.md                 # 本文件
-├── models/facehi.onnx        # 唯一对外模型（就是「下载下来的模型」）
+├── models/facehi.onnx        # 默认模型（常用模式=强力去高光）
+├── models/facehi_detail.onnx # 保护细节版（纹理优先、去高光弱一点）
+├── models/DETAIL.md          # 保护细节版的参数组合与验证记录
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
 ├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
 ├── requirements.txt          # 运行依赖（版本放宽）
@@ -56,7 +64,8 @@ python app_git_high2.py              # 仓库内则：python git-high2/app_git_h
 - **Python 版**：`highlight_removal.pipeline.process_image` 原始流水线
   （常用 / 高保真 / 最高质量三种模式；需要在完整仓库内运行，独立目录时此页
   会提示不可用，ONNX 页不受影响）。
-- **ONNX 版**：`models/facehi.onnx` 单会话推理（会话缓存，只加载一次）。
+- **ONNX 版**：`models/facehi.onnx`（常用）或 `models/facehi_detail.onnx`
+  （保护细节，页签内可切换）单会话推理（会话按模型缓存，各只加载一次）。
 - **对比**：同一份解码数组同时跑两条链路，四宫格展示原图 / Python / ONNX /
   放大差分，并给出 MAE、最大像素差、差异像素占比、PSNR、硬掩码 IoU 与两边耗时。
 
@@ -70,6 +79,7 @@ from facehi_onnx import remove_highlight
 
 out_bgr = remove_highlight("photo.png")                 # 返回 BGR ndarray
 remove_highlight("photo.png", save_to="photo_out.png")  # 直接写盘
+remove_highlight("photo.png", variant="detail")         # 保护细节版（见 models/DETAIL.md）
 ```
 
 底层等价于：
@@ -192,8 +202,9 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 | `result` | 输出 | uint8 | 同 `image` | 去高光结果 BGR |
 | `highlight_mask` | 输出 | uint8 | `[H,W]` | 最终硬掩码 |
 
-模式：内嵌「常用模式」配置。需要其它模式可在仓库内用
-`onnx/make_facehi_onnx.py` 改 `mode` 重新生成。
+两个模型接口完全相同。模式：`facehi.onnx` 内嵌「常用模式」配置，
+`facehi_detail.onnx` 内嵌「保护细节」模式（`onnx/make_facehi_onnx.py
+--preset detail` 生成）。需要其它组合可在仓库内改该脚本重新生成。
 
 ## 验证记录（本交付包实测）
 
@@ -208,6 +219,11 @@ copy git-high2\cpp\build\Release\facehi_custom_ops.dll git-high2\lib\
 - 耗时（4 核 CPU，`data/` 全部 17 张，详见 `bench/BENCH_REPORT.md`）：
   Python 热平均 0.285 秒 / 张，ONNX 热平均 0.223 秒 / 张（快约 21.7%），
   冷启动 ONNX 0.54 秒 vs Python 1.36 秒。
+
+`models/facehi_detail.onnx`（保护细节版）用同一 `.so` 实测 `data/` 全部
+17 张跑通：改动像素占比均值 3.66% → 2.53%（17/17 张更少）、黄金样本五官
+保护环带改动 −62%/−69%、高光区压暗 dL 8.40 → 2.32（故意更弱）。
+详见 `models/DETAIL.md`。
 
 `lib/facehi_custom_ops.dll`（Windows x64）按上文 mingw-w64 交叉编译步骤构建，
 已验证：`file` 显示 PE32+ DLL (x86-64)；`x86_64-w64-mingw32-objdump -p`
