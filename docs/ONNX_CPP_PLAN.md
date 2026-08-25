@@ -30,7 +30,7 @@
 
 （`face_blendshapes.tflite` 是表情系数模型，本流程不使用，不转换。）
 
-**用户实际得到的方案**：C++（OpenCV + ONNX Runtime）完整移植——神经网络部分走 ONNX Runtime（由 `.task` 内原始 TFLite 精确转换而来，非第三方替代模型），传统 CV 部分用 OpenCV C++ 以 1:1 相同算法、相同参数移植。最终 C++ 输出与 Python 输出**逐像素高度一致但非位级 100% 相同**，差异来源见第六节；实际差异用配套脚本量化并如实记录在 `tools/PARITY_RESULTS.md`。
+**用户实际得到的方案**：C++（OpenCV + ONNX Runtime）完整移植——神经网络部分走 ONNX Runtime（由 `.task` 内原始 TFLite 精确转换而来，非第三方替代模型），传统 CV 部分用 OpenCV C++ 以 1:1 相同算法、相同参数移植。C++ 输出与 Python 输出**逐像素高度一致但非位级 100% 相同**，差异来源见第六节（并已被第十节的隔离实验逐项量化）；实际差异用配套脚本量化并如实记录在 `tools/PARITY_RESULTS.md`。
 
 **单文件调用形态（已落地，见第九节）**：在上述 C++ 移植之上，整条流水线进一步封装为**一个**可直接
 `session.run` 的 ONNX 文件 `models/high_removal.onnx`。注意这不是「把 TELEA 等塞进了标准算子图」——
@@ -40,6 +40,13 @@
 [create_custom_op_wrapper.py](https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/custom_op_wrapper/create_custom_op_wrapper.py)）：
 图中只有一个 `ai.high:HighlightRemoval` 自定义算子节点，两个人脸网络与 `default.yaml`
 以节点属性内嵌，内核（`libhigh_removal_ops.so`）就是本仓库对拍验证过的 C++ 流水线。
+
+**位级 100% 一致（已落地，见第十节）**：同一个 `models/high_removal.onnx` 另配一个**精确内核**
+`libhigh_removal_pyops.so`（默认内核）：Compute 时在宿主进程内直接调用原始 Python 流水线本体
+（`highlight_removal.exact_kernel` → `process_image`，MediaPipe + pip OpenCV），因此
+`session.run` 输出与 Python `process_image` **逐位相同**（17 张样例实测 17/17 `np.array_equal`，
+MAE 0、最大差 0、掩码 IoU 1.0）。约束：宿主必须是 Python 进程且本仓库可导入。
+纯 C++ 宿主仍用 C++ 内核（亚像素级浮点尾差如实记录）。
 
 ---
 
@@ -188,11 +195,82 @@
   因此同一个 .so 可被 Python `onnxruntime`（>= 1.22）或任意 C++ ORT 应用加载；
   链接 `-z nodelete` 防止宿主 dlclose 时 OpenCV 常驻线程执行到已卸载代码。
 - **调用**：Python 见 `tools/run_high_onnx.py`（`register_custom_ops_library` + 一次
-  `session.run`，不依赖本仓库其它 Python 代码）；C++ 见 `cpp/tools/high_onnx_session.cpp`。
-- **实测**（`tools/compare_python_onnx_session.py`，17 张全量）：单 ONNX 会话输出与旧
-  `high_onnx` CLI 输出**逐位相同**（同一内核代码）；与原始 Python 流程平均 MAE **0.0028**/255、
-  平均 PSNR **72.55 dB**、硬掩码平均 IoU **0.9996**、最大单像素差 10/255——与此前
-  C++ CLI vs Python 的对拍结果完全一致。**不是位级 100%**，差异来源同第六节；
-  若要位级一致，唯一途径是 Python 侧也改用本 ONNX 会话调用（输出与 C++ 逐位相同）。
+  `session.run`）；C++ 见 `cpp/tools/high_onnx_session.cpp`。
+- **实测**（`tools/compare_python_onnx_session.py --kernel cpp`，17 张全量）：单 ONNX 会话
+  （C++ 内核）输出与旧 `high_onnx` CLI 输出**逐位相同**（同一内核代码）；与原始 Python 流程
+  平均 MAE **0.0028**/255、平均 PSNR **72.55 dB**、硬掩码平均 IoU **0.9996**、最大单像素差
+  10/255——与此前 C++ CLI vs Python 的对拍结果完全一致。**C++ 内核不是位级 100%**，
+  差异来源同第六节（第十节给出隔离实测）；位级 100% 由第十节的精确内核提供。
 - `onnxruntime-extensions` 提供的额外 CV 算子里没有 TELEA inpaint 与连通域分析，
   对本流程无实质帮助，故未引入该依赖。
+
+## 十、精确内核：位级 100% 一致路径（已完成）
+
+### 10.1 残差来源隔离（先量化，再动手）
+
+`tools/parity_isolate.py` 把「Python(MediaPipe) vs 单 ONNX(C++ 内核)」的 17 张残差拆成独立来源
+（完整表格见 `tools/PARITY_RESULTS.md` 隔离章节）：
+
+| 对比 | 隔离对象 | 实测（17 张均值） |
+|------|---------|------------------|
+| MediaPipe Tasks vs ORT landmarker（1/4 检测分辨率，478 点，换算回原图像素） | 关键点引擎（TFLite/XNNPACK vs ONNX Runtime） | 最大 0.024 px / 平均 0.008 px（单图最大 0.061 px） |
+| Python(MediaPipe) vs Python(ORT 关键点)，CV 代码完全相同 | 仅关键点浮点尾差 | MAE 0.0005；掩码 IoU 的全部下降（0.9966~0.9998）都来自这里 |
+| Python(ORT 关键点) vs 单 ONNX(C++ 内核)，关键点近似相同 | 仅 OpenCV 版本（pip 4.14 vs apt 4.6）+ C++ 浮点路径 | MAE 0.0026（占总 MAE 0.0028 的绝大部分），掩码 IoU ≈ 1.0000 |
+| Python 同图同配置跑两遍 | 流水线自身确定性 | 逐位相同（无随机性） |
+| CLI「常用模式」 vs `default.yaml` 原始值（唯一差异 `brow_region_max_fraction` 0.32/0.28） | 配置口径 | 0/17 张输出受影响 |
+
+结论：**MAE 主要来自 OpenCV 版本差异，掩码边界翻转主要来自关键点引擎浮点尾差**。
+两者都是「同一算法、不同二进制」的尾差，逐项追平（自编译 pip 同版本 OpenCV、给 C++ 换 TFLite/XNNPACK
+推理）仍无法证明位级相同——只要有任何一个浮点路径不同，整数栅格化就可能翻转个别像素。
+因此位级 100% 的唯一可靠做法是：让 `session.run` 执行的就是原始 Python 流水线**本体**。
+
+### 10.2 实现：同一个 ONNX 文件，第二个内核库
+
+- **模型不变**：`models/high_removal.onnx` 无需重新导出（图、属性、字节均不变）。
+  自定义算子选内核 = 选注册哪个 .so。
+- **精确内核** `cpp/src/py_custom_op.cpp` → `libhigh_removal_pyops.so`：注册与 C++ 内核
+  完全相同的 `ai.high:HighlightRemoval` 签名；Compute 时经 CPython **稳定 ABI**
+  （`Py_LIMITED_API`，Python ≥ 3.10）调用宿主进程内的
+  `highlight_removal.exact_kernel.run_from_buffer`，后者用节点属性里内嵌的
+  `default.yaml` 构建配置（与 `app_studio.py` 的 `studio_config()` 完全一致）后直接调用
+  `highlight_removal.pipeline.process_image`。**没有第二套实现，不存在近似**。
+- 仓库定位：优先环境变量 `HIGH_PY_KERNEL_PATH`，否则按 .so 自身路径（`dladdr`）向上推导
+  （`cpp/build/` → 仓库根），自动加入 `sys.path`。
+- GIL：`sess.run` 在 Python 侧会释放 GIL，内核线程用 `PyGILState_Ensure` 重新获取，
+  Python 侧再用可重入锁串行化 MediaPipe 实例访问。
+- 刻意**不链接 libpython**：符号由宿主解释器提供。因此纯 C++ 宿主 `dlopen` 本库会因
+  符号缺失直接失败——这是预期行为，如实声明：**精确内核只服务 Python 宿主**；
+  纯 C++ 部署继续用 C++ 内核。
+
+### 10.3 实测（`tools/compare_python_onnx_session.py`，17 张全量）
+
+| 内核 | 逐位相同（含掩码） | MAE | 最大像素差 | 硬掩码 IoU |
+|------|-------------------|-----|-----------|-----------|
+| 精确内核 `libhigh_removal_pyops.so`（默认） | **17/17** | **0.0000** | **0** | **1.0000** |
+| C++ 快速内核 `libhigh_removal_ops.so` | 0/17 | 0.0028 | 10 | 0.9996 |
+
+`app_studio.py` 的 ONNX / 对比模式默认走精确内核（对比视图 Python−ONNX 恒为 0）；
+`HIGH_ONNX_KERNEL=cpp` 切换 C++ 内核，`HIGH_OPS_LIB` 直接指定库文件。
+
+### 10.4 如何调用（一个 ONNX 文件）
+
+```python
+import cv2
+import onnxruntime as ort
+
+so = ort.SessionOptions()
+so.register_custom_ops_library("cpp/build/libhigh_removal_pyops.so")  # 精确内核；C++ 内核换 libhigh_removal_ops.so
+sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
+result, hard_mask = sess.run(["result", "hard_mask"], {"image": cv2.imread("data/1.png")})
+```
+
+### 10.5 剩余边界（如实声明）
+
+- 精确内核要求：Python（≥ 3.10）宿主 + 本仓库可导入 + `mediapipe`/`opencv-python` 已安装
+  + `models/face_landmarker.task` 在仓库内。它是「把原始 Python 流水线装进 ONNX 接口」，
+  不是把 Python 依赖消掉。
+- 纯 C++ 宿主（无 Python 解释器）没有位级 100% 路径，只有 C++ 内核的亚像素级尾差
+  （上表如实记录）；这由第六节的浮点尾差机理决定。
+- 位级一致性在「同一台机器、同一套已安装依赖」内成立且可复验（流水线无随机性）；
+  跨机器/跨依赖版本时，Python 流水线本身的输出就会随 OpenCV/MediaPipe 版本变化，
+  精确内核与 Python 引擎会**一起**变化并保持互相逐位一致。

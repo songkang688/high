@@ -39,10 +39,12 @@ python app_studio.py
 ```
 
 浏览器打开：http://127.0.0.1:7861。三种模式：**Python**（原始链路）、**ONNX**
-（`models/high_removal.onnx` + `libhigh_removal_ops.so`）、**对比**（同图双引擎并排 +
-差异热力图 + MAE / PSNR / 掩码 IoU / 耗时）。ONNX 与对比模式需要先按
-[`cpp/README.md`](cpp/README.md) 编译 `libhigh_removal_ops.so`（也可用环境变量
-`HIGH_OPS_LIB` 指定 .so 路径）；缺失时页面会给出构建提示，Python 模式不受影响。
+（`models/high_removal.onnx` + 自定义算子库）、**对比**（同图双引擎并排 +
+差异热力图 + MAE / PSNR / 掩码 IoU / 耗时）。ONNX 侧默认使用**精确内核**
+`libhigh_removal_pyops.so`（`session.run` 输出与 Python 引擎**逐位相同**，对比模式
+MAE 恒为 0）；设 `HIGH_ONNX_KERNEL=cpp` 可切换到 C++ 快速内核 `libhigh_removal_ops.so`
+（存在亚像素级浮点尾差），`HIGH_OPS_LIB` 可直接指定 .so 路径。两个库由同一次
+[`cpp/README.md`](cpp/README.md) 构建产出；缺失时页面会给出构建提示，Python 模式不受影响。
 监听地址 / 端口可用 `HIGH_STUDIO_HOST`（默认 127.0.0.1）、`HIGH_STUDIO_PORT`（默认 7861）覆盖。
 
 桌面版：
@@ -77,16 +79,23 @@ python cli_process.py -i data/1.png
 整条流水线已封装为**一个** ONNX 文件 `models/high_removal.onnx`（内嵌两个人脸网络权重与
 `configs/default.yaml` 全部配置）。因为 TELEA inpaint、连通域分析、动态分位数阈值等环节
 **无法用标准 ONNX 算子表达**（详见 `docs/ONNX_CPP_PLAN.md` 第一节），这里采用微软官方的
-「自定义算子封装外部推理运行时」方案：图中只有一个 `ai.high:HighlightRemoval` 自定义算子，
-内核就是上面对拍验证过的 C++ 流水线，编译为 `libhigh_removal_ops.so`
-（加载它是 ONNX Runtime 执行自定义算子的必需步骤，性质等同于安装 onnxruntime 本体）：
+「自定义算子封装外部推理运行时」方案：图中只有一个 `ai.high:HighlightRemoval` 自定义算子节点。
+同一个 ONNX 文件配两个**可互换**的内核库（注册哪个就用哪个，模型文件不变）：
+
+| 内核库 | 与 Python 原始流程的一致性（17 张实测） | 适用场景 |
+|--------|----------------------------------------|---------|
+| `libhigh_removal_pyops.so`（**精确内核，默认**） | **17/17 逐位相同**（np.array_equal，MAE 0、最大差 0、掩码 IoU 1.0）——Compute 内直接调用原始 Python 流水线本体 | Python 宿主（`onnxruntime` + 本仓库 + mediapipe），要求 100% 等效 |
+| `libhigh_removal_ops.so`（C++ 快速内核） | 平均 MAE 0.0028/255、PSNR 72.55 dB、掩码 IoU 0.9996、最大单像素差 10/255 | 纯 C++ 部署 / 无 Python 环境，可接受亚像素级浮点尾差 |
 
 ```python
 import cv2
 import onnxruntime as ort
 
 so = ort.SessionOptions()
-so.register_custom_ops_library("cpp/build/libhigh_removal_ops.so")   # 见 cpp/README.md 构建
+# 精确内核（与 Python process_image 逐位相同；见 cpp/README.md 构建）：
+so.register_custom_ops_library("cpp/build/libhigh_removal_pyops.so")
+# 或 C++ 快速内核（无 Python/MediaPipe 依赖）：
+# so.register_custom_ops_library("cpp/build/libhigh_removal_ops.so")
 sess = ort.InferenceSession("models/high_removal.onnx", so, providers=["CPUExecutionProvider"])
 
 image = cv2.imread("data/1.png")                                     # uint8 [H, W, 3] BGR
@@ -94,10 +103,10 @@ result = sess.run(["result"], {"image": image})[0]                   # uint8 [H,
 cv2.imwrite("out.png", result)
 ```
 
-完整示例：`python tools/run_high_onnx.py -i data/1.png -o out.png`（Python）、
-`cpp/build/high_onnx_session`（C++）。单 ONNX 会话输出与 C++ CLI **逐位相同**；
-与原始 Python 流程的实测差异为 17 张平均 MAE 0.0028/255、PSNR 72.55 dB、掩码 IoU 0.9996
-（非位级 100%，原因是推理引擎浮点尾差，见 `tools/PARITY_RESULTS.md`）。
+完整示例：`python tools/run_high_onnx.py -i data/1.png -o out.png`（Python，`--kernel exact/cpp`）、
+`cpp/build/high_onnx_session`（C++，只能用 C++ 内核）。精确内核要求宿主为 Python 进程且本仓库可导入
+（默认按 .so 位置自动定位仓库，也可用 `HIGH_PY_KERNEL_PATH` 指定）；C++ 内核输出与 C++ CLI **逐位相同**。
+全部实测数字与误差来源拆解见 `tools/PARITY_RESULTS.md`。
 
 ## 说明
 

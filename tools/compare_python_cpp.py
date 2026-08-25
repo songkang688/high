@@ -167,7 +167,21 @@ def main() -> int:
         "- 剩余差异来源：MediaPipe(TFLite/XNNPACK) 与 ONNX Runtime 的浮点尾差导致关键点亚像素级偏移，"
         "经整数栅格化后在掩码边界处放大为个别像素差；以及 Python/C++ 两侧 OpenCV 版本不同。",
     ]
-    Path(args.report).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # 保留报告文件中其它脚本维护的标记章节（单 ONNX 会话对拍、误差来源隔离等）。
+    report_path = Path(args.report)
+    preserved = []
+    if report_path.is_file():
+        old = report_path.read_text(encoding="utf-8")
+        for begin, end in (
+            ("<!-- single-onnx-session-begin -->", "<!-- single-onnx-session-end -->"),
+            ("<!-- parity-isolate-begin -->", "<!-- parity-isolate-end -->"),
+        ):
+            if begin in old and end in old:
+                preserved.append(begin + old.split(begin, 1)[1].split(end, 1)[0] + end)
+    text = "\n".join(lines) + "\n"
+    if preserved:
+        text += "\n" + "\n\n".join(preserved) + "\n"
+    report_path.write_text(text, encoding="utf-8")
     print(f"\n报告已写入 {args.report}")
     return 0
 
