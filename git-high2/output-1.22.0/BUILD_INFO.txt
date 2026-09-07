@@ -4,7 +4,12 @@ onnx_python=1.22.0
 onnxruntime=1.22.0 (ORT_API_VERSION 22)
 opencv_cxx=4.14.0 static
 yaml_cpp=0.8.0 static
+linux_gxx=13.3.0 IPP=ON ICV=2026.0.0
+windows_mingw=g++-posix GCC13 OpenCV4.14.0 IPP=OFF
+fp_flags=-O2 -ffp-contract=off -fno-fast-math
 original_lib_and_models=kept (not overwritten)
+quality_vs_old_lib=14/17 bit-identical; 1.png max=7/255 MAE=0.003183 (same as old ONNX-vs-Python)
+speed_linux_warm_mean=old~0.227s new~0.213-0.217s (not slower; see COMPARE.md)
 
 files:
   facehi.onnx	6279872	5.99 MB	sha256=255537e5b5a95d1aab5bfb7b31a28157d5176498d47f8de5703223dfd31e527e

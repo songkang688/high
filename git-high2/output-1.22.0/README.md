@@ -18,8 +18,9 @@
 | `样例图.zip` | 仓库 `data/` 17 张样例 |
 | `facehi_onnx.py` | 一行调用封装 |
 | `requirements.txt` | 钉死 `onnxruntime==1.22.0` |
+| `COMPARE.md` | Linux/Windows 环境版本清单 + 与旧 `lib/` 的质量/速度实测 |
 
-ONNX 与对应平台的 `.so` / `.dll` **必须配合使用**。
+ONNX 与对应平台的 `.so` / `.dll` **必须配合使用**。环境版本、与旧 `lib/` 的质量/速度对照见 `COMPARE.md`。
 
 ## 快速开始
 
