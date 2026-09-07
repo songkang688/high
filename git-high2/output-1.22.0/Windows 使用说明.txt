@@ -1,0 +1,24 @@
+本目录是 git-high2 默认档（facehi.onnx）按 ONNX / ONNX Runtime 1.22.0 重新导出、重新编译后的完整交付包。原来的 git-high2/lib/ 与 git-high2/models/ 没有改动。
+
+配套文件：facehi.onnx + facehi_custom_ops.dll 必须放在同一目录一起使用。模型图里只有自定义域 ai.facehi 的节点，不注册 DLL，onnxruntime 会直接报找不到算子。
+
+环境要求：Windows 10/11 x64，Python 3.10+。DLL 已静态链入 OpenCV / yaml-cpp / libgcc，一般无需再装 Visual C++ 或 MinGW 运行库。
+
+安装依赖（PowerShell）：
+  python -m venv .venv
+  .venv\Scripts\pip install -r requirements.txt
+请保持 onnxruntime==1.22.0。
+
+推理示例：
+  .venv\Scripts\python -c "from facehi_onnx import remove_highlight; remove_highlight(r'样例图\1.png', save_to='out.png')"
+
+底层等价写法：
+  import onnxruntime as ort
+  so = ort.SessionOptions()
+  so.register_custom_ops_library('facehi_custom_ops.dll')
+  sess = ort.InferenceSession('facehi.onnx', so)
+  result, mask = sess.run(None, {'image': bgr_uint8_hwc})
+
+输入：uint8 BGR [H,W,3]（与 cv2.imread 一致）。输出：result 同形状 BGR，highlight_mask 为 uint8 [H,W] 硬掩码。
+
+不要把本目录的 DLL 与旧的 git-high2/lib/facehi_custom_ops.dll 混用；本目录只保证配合官方 onnxruntime 1.22.0 Windows CPU 包。

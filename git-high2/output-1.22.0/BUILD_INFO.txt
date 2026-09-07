@@ -1,0 +1,15 @@
+git-high2 output-1.22.0
+built_utc=2026-09-07T03:49:48Z
+onnx_python=1.22.0
+onnxruntime=1.22.0 (ORT_API_VERSION 22)
+opencv_cxx=4.14.0 static
+yaml_cpp=0.8.0 static
+original_lib_and_models=kept (not overwritten)
+
+files:
+  facehi.onnx	6279872	5.99 MB	sha256=255537e5b5a95d1aab5bfb7b31a28157d5176498d47f8de5703223dfd31e527e
+  libfacehi_custom_ops.so	43918280	41.88 MB	sha256=95b4b59fc8292d11ee552a6d5c59f0c11b92165bc2470b2221df5b047f039260
+  facehi_custom_ops.dll	13326541	12.71 MB	sha256=861264be0dd7b7a75784bfca0548f4981f11219c263e73a98abf1a3a493e0817
+  Linux 使用说明.docx	37664	0.04 MB	sha256=b25879ecf57b749113dbbb9d2e694f6d25e93f7ec6c609f070abd1480be40cba
+  Windows 使用说明.docx	37655	0.04 MB	sha256=e13bf15ca3a95f55ce1b23429957ad356ed50b026ea8934b0ae541e10aa15482
+  样例图.zip	20490238	19.54 MB	sha256=37341e6548aea82d08e4b6a2391cc691761962f0eac005d12da198733816eec9

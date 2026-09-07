@@ -13,10 +13,13 @@
 - 运行需要注册配套的自定义算子库 libfacehi_custom_ops.so（ORT 设计如此，
   任何含自定义域的 ONNX 都必须带 kernel 实现库）。
 
-用法：.venv/bin/python onnx/make_facehi_onnx.py
+用法：
+  .venv/bin/python onnx/make_facehi_onnx.py
+  .venv/bin/python onnx/make_facehi_onnx.py --out git-high2/output-1.22.0/facehi.onnx
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -30,7 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 MODELS_DIR = ROOT / "onnx" / "models"
-OUT_PATH = MODELS_DIR / "facehi.onnx"
+DEFAULT_OUT_PATH = MODELS_DIR / "facehi.onnx"
 MODES = ("常用模式", "高保真模式", "最高质量模式")
 CONFIG_SECTIONS = ("face_detection", "regions", "highlight_detection",
                    "highlight_removal", "pipeline")
@@ -54,6 +57,13 @@ def bytes_tensor(name: str, data: bytes) -> onnx.TensorProto:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description="导出 facehi.onnx（不覆盖则请传 --out）")
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT_PATH,
+                    help="输出路径。默认 onnx/models/facehi.onnx；ORT 1.22 交付请指到 output-1.22.0/")
+    args = ap.parse_args()
+    out_path: Path = args.out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     detector = (MODELS_DIR / "face_detector.onnx").read_bytes()
     landmarks = (MODELS_DIR / "face_landmarks_detector.onnx").read_bytes()
 
@@ -107,13 +117,20 @@ def main() -> int:
         graph,
         opset_imports=[helper.make_opsetid("", 19), helper.make_opsetid("ai.facehi", 1)],
         producer_name="facehi",
+        producer_version=f"onnx-{onnx.__version__}",
         doc_string="面部去高光整条流水线的单一 ONNX 封装（ORT 自定义算子包装外部流水线）",
     )
     model.ir_version = 9
-    onnx.save(model, str(OUT_PATH))
-    size_mb = OUT_PATH.stat().st_size / 1e6
-    print(f"[完成] {OUT_PATH}（{size_mb:.2f} MB，内嵌 detector={len(detector)}B, "
-          f"landmarks={len(landmarks)}B, haar={len(haar_xml)}B）")
+    meta = model.metadata_props.add()
+    meta.key = "onnx_package"
+    meta.value = onnx.__version__
+    meta2 = model.metadata_props.add()
+    meta2.key = "target_onnxruntime"
+    meta2.value = "1.22.0"
+    onnx.save(model, str(out_path))
+    size_mb = out_path.stat().st_size / 1e6
+    print(f"[完成] {out_path}（{size_mb:.2f} MB，onnx={onnx.__version__}，"
+          f"内嵌 detector={len(detector)}B, landmarks={len(landmarks)}B, haar={len(haar_xml)}B）")
     return 0
 
 
