@@ -47,8 +47,10 @@ def add_heading_doc(title: str, paragraphs: list[str]) -> Document:
 LINUX_DOC = [
     "本目录是 git-high2 默认档（facehi.onnx）按 ONNX / ONNX Runtime 1.22.0 重新导出、"
     "重新编译后的完整交付包。原来的 git-high2/lib/ 与 git-high2/models/ 没有改动。",
-    "配套文件：facehi.onnx + libfacehi_custom_ops.so 必须放在同一目录一起使用。"
-    "模型图里只有自定义域 ai.facehi 的节点，不注册 .so，onnxruntime 会直接报找不到算子。",
+    "配套文件：facehi.onnx + libfacehi_custom_ops.so + libfacehi_ort122.so 必须放在同一目录。"
+    "模型图里只有自定义域 ai.facehi 的节点，不注册 .so，onnxruntime 会直接报找不到算子。"
+    "libfacehi_ort122.so 是 ONNX Runtime 1.22.0 的私有副本，给自定义算子内部跑人脸检测/"
+    "关键点子模型用；请勿删除，也不要和 pip 的 onnxruntime 混路径。",
     "环境要求：Linux x86-64，Python 3.10+。",
     "安装依赖：\n  python3 -m venv .venv\n  .venv/bin/pip install -r requirements.txt\n"
     "requirements.txt 已钉死 onnxruntime==1.22.0，请不要换成其他主版本。",
@@ -69,8 +71,10 @@ LINUX_DOC = [
 WINDOWS_DOC = [
     "本目录是 git-high2 默认档（facehi.onnx）按 ONNX / ONNX Runtime 1.22.0 重新导出、"
     "重新编译后的完整交付包。原来的 git-high2/lib/ 与 git-high2/models/ 没有改动。",
-    "配套文件：facehi.onnx + facehi_custom_ops.dll 必须放在同一目录一起使用。"
-    "模型图里只有自定义域 ai.facehi 的节点，不注册 DLL，onnxruntime 会直接报找不到算子。",
+    "配套文件：facehi.onnx + facehi_custom_ops.dll + facehi_ort122.dll 必须放在同一目录。"
+    "模型图里只有自定义域 ai.facehi 的节点，不注册 DLL，onnxruntime 会直接报找不到算子。"
+    "facehi_ort122.dll 是 ONNX Runtime 1.22.0 的私有副本，给自定义算子内部跑人脸检测/"
+    "关键点子模型用；请勿删除。",
     "环境要求：Windows 10/11 x64，Python 3.10+。DLL 已静态链入 OpenCV / yaml-cpp / libgcc，"
     "一般无需再装 Visual C++ 或 MinGW 运行库。",
     "安装依赖（PowerShell）：\n  python -m venv .venv\n  .venv\\Scripts\\pip install -r requirements.txt\n"
@@ -113,6 +117,7 @@ def copy_if(src: Path, dst: Path) -> None:
 def write_build_info(so: Path, dll: Path, onnx_path: Path, extra: list[str]) -> None:
     files = [
         onnx_path, so, dll,
+        OUT / "libfacehi_ort122.so", OUT / "facehi_ort122.dll",
         OUT / "Linux 使用说明.docx", OUT / "Windows 使用说明.docx",
         OUT / "样例图.zip",
     ]
@@ -149,7 +154,9 @@ def write_readme() -> None:
 |---|---|
 | `facehi.onnx` | 默认档模型，用 Python `onnx==1.22.0` 重新导出 |
 | `libfacehi_custom_ops.so` | Linux x86-64 自定义算子（ORT 1.22.0 头文件） |
+| `libfacehi_ort122.so` | Linux 私有 ORT 1.22.0，给自定义算子内部子模型用 |
 | `facehi_custom_ops.dll` | Windows x64 自定义算子（ORT 1.22.0 头文件） |
+| `facehi_ort122.dll` | Windows 私有 ORT 1.22.0，给自定义算子内部子模型用 |
 | `Linux 使用说明.docx` / `.txt` | Linux 用法 |
 | `Windows 使用说明.docx` / `.txt` | Windows 用法 |
 | `样例图.zip` | 仓库 `data/` 17 张样例 |
@@ -177,16 +184,24 @@ def main() -> int:
     ap.add_argument("--so", type=Path, required=True)
     ap.add_argument("--dll", type=Path, required=True)
     ap.add_argument("--onnx", type=Path, required=True)
+    ap.add_argument("--ort-so", type=Path, required=True,
+                    help="官方 libonnxruntime.so.1.22.0，复制为 libfacehi_ort122.so")
+    ap.add_argument("--ort-dll", type=Path, required=True,
+                    help="官方 onnxruntime.dll，复制为 facehi_ort122.dll")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     copy_if(args.onnx, OUT / "facehi.onnx")
     copy_if(args.so, OUT / "libfacehi_custom_ops.so")
     copy_if(args.dll, OUT / "facehi_custom_ops.dll")
+    copy_if(args.ort_so, OUT / "libfacehi_ort122.so")
+    copy_if(args.ort_dll, OUT / "facehi_ort122.dll")
     write_docs()
     zip_samples()
     write_readme()
     write_build_info(OUT / "libfacehi_custom_ops.so", OUT / "facehi_custom_ops.dll",
-                     OUT / "facehi.onnx", extra=[])
+                     OUT / "facehi.onnx", extra=[
+                         "inner_ort=libfacehi_ort122.so / facehi_ort122.dll (private ORT 1.22.0)",
+                     ])
     print(f"[完成] {OUT}")
     for p in sorted(OUT.iterdir()):
         if p.is_file():

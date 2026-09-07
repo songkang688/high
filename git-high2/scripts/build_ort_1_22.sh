@@ -26,4 +26,6 @@ x86_64-w64-mingw32-strip --strip-unneeded "$ROOT/git-high2/cpp/build-win-ort122/
 "$ROOT/.venv/bin/python" "$ROOT/git-high2/scripts/pack_output_122.py" \
   --so "$ROOT/git-high2/cpp/build-ort122/libfacehi_custom_ops.so" \
   --dll "$ROOT/git-high2/cpp/build-win-ort122/facehi_custom_ops.dll" \
-  --onnx /tmp/facehi-1.22.0.onnx
+  --onnx /tmp/facehi-1.22.0.onnx \
+  --ort-so /opt/ort-1.22.0/lib/libonnxruntime.so.1.22.0 \
+  --ort-dll /opt/xwin/ort-win/onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll

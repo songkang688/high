@@ -43,7 +43,8 @@ git-high2/
 
 `lib/` 与 `models/facehi.onnx` **保持原样**。需要 ONNX / ONNX Runtime **1.22.0** 时，用独立目录
 `output-1.22.0/`：里面是重新导出的 `facehi.onnx`、按 ORT 1.22.0 头文件重编的
-`libfacehi_custom_ops.so` / `facehi_custom_ops.dll`、Windows/Linux 使用说明、样例图 zip。
+`libfacehi_custom_ops.so` / `facehi_custom_ops.dll`、私有运行时 `libfacehi_ort122.so` /
+`facehi_ort122.dll`、Windows/Linux 使用说明、样例图 zip。
 运行依赖钉死 `onnxruntime==1.22.0`，不要和 `lib/` 里的旧库混用。
 
 ## 快速开始

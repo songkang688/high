@@ -5,15 +5,18 @@
 
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 
-#include <onnxruntime_cxx_api.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect.hpp>
 
 #include "facehi/face_landmarks.hpp"
+#include "facehi/inner_ort.hpp"
 #include "facehi/utils.hpp"
 
 namespace facehi {
@@ -132,23 +135,11 @@ std::vector<float> image_to_tensor(const cv::Mat& image_bgr, double cx, double c
   return tensor;
 }
 
-// Windows 的 ORTCHAR_T 是 wchar_t：UTF-8 路径需转宽字符（中文路径安全）；
-// 其余平台直接透传。仅文件路径构造用到（自定义算子走内存缓冲构造）。
-#ifdef _WIN32
-std::wstring to_ort_path(const std::string& utf8) {
-  return std::filesystem::u8path(utf8).wstring();
-}
-#else
-const std::string& to_ort_path(const std::string& utf8) { return utf8; }
-#endif
-
 }  // namespace
 
 struct OnnxFaceLandmarker::Impl {
-  Ort::Env env{ORT_LOGGING_LEVEL_ERROR, "facehi"};
-  Ort::SessionOptions so;
-  std::unique_ptr<Ort::Session> det;
-  std::unique_ptr<Ort::Session> lmk;
+  std::unique_ptr<InnerSession> det;
+  std::unique_ptr<InnerSession> lmk;
   std::vector<std::array<float, 2>> anchors = build_blazeface_anchors();
   double min_det = 0.5;
   double min_presence = 0.5;
@@ -160,11 +151,8 @@ OnnxFaceLandmarker::OnnxFaceLandmarker(const std::string& detector_path,
                                        double min_detection_confidence,
                                        double min_presence_confidence, int num_faces)
     : impl_(std::make_unique<Impl>()) {
-  impl_->so.SetIntraOpNumThreads(1);
-  impl_->det = std::make_unique<Ort::Session>(impl_->env, to_ort_path(detector_path).c_str(),
-                                              impl_->so);
-  impl_->lmk = std::make_unique<Ort::Session>(impl_->env, to_ort_path(landmark_path).c_str(),
-                                              impl_->so);
+  impl_->det = std::make_unique<InnerSession>(detector_path, 1);
+  impl_->lmk = std::make_unique<InnerSession>(landmark_path, 1);
   impl_->min_det = min_detection_confidence;
   impl_->min_presence = min_presence_confidence;
   impl_->num_faces = num_faces;
@@ -175,9 +163,8 @@ OnnxFaceLandmarker::OnnxFaceLandmarker(const void* detector_bytes, size_t detect
                                        double min_detection_confidence,
                                        double min_presence_confidence, int num_faces)
     : impl_(std::make_unique<Impl>()) {
-  impl_->so.SetIntraOpNumThreads(1);
-  impl_->det = std::make_unique<Ort::Session>(impl_->env, detector_bytes, detector_size, impl_->so);
-  impl_->lmk = std::make_unique<Ort::Session>(impl_->env, landmark_bytes, landmark_size, impl_->so);
+  impl_->det = std::make_unique<InnerSession>(detector_bytes, detector_size, 1);
+  impl_->lmk = std::make_unique<InnerSession>(landmark_bytes, landmark_size, 1);
   impl_->min_det = min_detection_confidence;
   impl_->min_presence = min_presence_confidence;
   impl_->num_faces = num_faces;
@@ -187,20 +174,17 @@ OnnxFaceLandmarker::~OnnxFaceLandmarker() = default;
 
 std::vector<cv::Mat> OnnxFaceLandmarker::detect(const cv::Mat& image_bgr) const {
   const int ih = image_bgr.rows, iw = image_bgr.cols;
-  auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
   // --- 人脸检测（128×128 letterbox，[-1,1]）---
   double side = static_cast<double>(std::max(iw, ih));
   std::vector<float> in_det =
       image_to_tensor(image_bgr, iw / 2.0, ih / 2.0, side, side, 0.0, 128, -1.0f, 1.0f);
   std::array<int64_t, 4> det_shape = {1, 128, 128, 3};
-  Ort::Value det_in = Ort::Value::CreateTensor<float>(mem, in_det.data(), in_det.size(),
-                                                      det_shape.data(), det_shape.size());
-  const char* det_inputs[] = {"input"};
   const char* det_outputs[] = {"regressors", "classificators"};
-  auto det_out = impl_->det->Run(Ort::RunOptions{}, det_inputs, &det_in, 1, det_outputs, 2);
-  const float* reg = det_out[0].GetTensorData<float>();    // (1, 896, 16)
-  const float* cls = det_out[1].GetTensorData<float>();    // (1, 896, 1)
+  auto det_out = impl_->det->run(in_det.data(), in_det.size(), det_shape.data(), det_shape.size(),
+                                 "input", det_outputs, 2);
+  const float* reg = det_out[0].ptr();    // (1, 896, 16)
+  const float* cls = det_out[1].ptr();    // (1, 896, 1)
 
   std::vector<Detection> dets;
   for (size_t i = 0; i < impl_->anchors.size(); ++i) {
@@ -254,13 +238,11 @@ std::vector<cv::Mat> OnnxFaceLandmarker::detect(const cv::Mat& image_bgr) const 
     std::vector<float> in_lmk =
         image_to_tensor(image_bgr, cx * iw, cy * ih, rw, rh, rotation, 256, 0.0f, 1.0f);
     std::array<int64_t, 4> lmk_shape = {1, 256, 256, 3};
-    Ort::Value lmk_in = Ort::Value::CreateTensor<float>(mem, in_lmk.data(), in_lmk.size(),
-                                                        lmk_shape.data(), lmk_shape.size());
-    const char* lmk_inputs[] = {"input_12"};
     const char* lmk_outputs[] = {"Identity", "Identity_1"};
-    auto lmk_out = impl_->lmk->Run(Ort::RunOptions{}, lmk_inputs, &lmk_in, 1, lmk_outputs, 2);
-    const float* lm_raw = lmk_out[0].GetTensorData<float>();  // 1434 = 478*3
-    float flag = lmk_out[1].GetTensorData<float>()[0];
+    auto lmk_out = impl_->lmk->run(in_lmk.data(), in_lmk.size(), lmk_shape.data(),
+                                   lmk_shape.size(), "input_12", lmk_outputs, 2);
+    const float* lm_raw = lmk_out[0].ptr();  // 1434 = 478*3
+    float flag = lmk_out[1].ptr()[0];
     double presence = 1.0 / (1.0 + std::exp(-static_cast<double>(flag)));
     if (presence < impl_->min_presence) continue;
 

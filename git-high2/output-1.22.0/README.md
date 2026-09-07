@@ -10,7 +10,9 @@
 |---|---|
 | `facehi.onnx` | 默认档模型，用 Python `onnx==1.22.0` 重新导出 |
 | `libfacehi_custom_ops.so` | Linux x86-64 自定义算子（ORT 1.22.0 头文件） |
+| `libfacehi_ort122.so` | Linux 私有 ORT 1.22.0，给自定义算子内部子模型用 |
 | `facehi_custom_ops.dll` | Windows x64 自定义算子（ORT 1.22.0 头文件） |
+| `facehi_ort122.dll` | Windows 私有 ORT 1.22.0，给自定义算子内部子模型用 |
 | `Linux 使用说明.docx` / `.txt` | Linux 用法 |
 | `Windows 使用说明.docx` / `.txt` | Windows 用法 |
 | `样例图.zip` | 仓库 `data/` 17 张样例 |
