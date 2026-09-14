@@ -51,6 +51,7 @@ add_library(facehi_core
   src/remove_highlight.cpp
   src/quality_metrics.cpp
   src/face_detect.cpp
+  src/inner_ort.cpp
   src/pipeline.cpp
   src/config.cpp
 )
@@ -103,7 +104,7 @@ endif()
 # 静态链入 facehi_core / OpenCV / yaml-cpp 后用 --exclude-libs 隐藏内部符号，
 # 避免与宿主进程中的其他 OpenCV 副本冲突。
 add_library(facehi_custom_ops SHARED src/custom_op.cpp)
-target_link_libraries(facehi_custom_ops PRIVATE facehi_core)
+target_link_libraries(facehi_custom_ops PRIVATE facehi_core ${CMAKE_DL_LIBS})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_link_options(facehi_custom_ops PRIVATE "LINKER:--exclude-libs,ALL")
 endif()

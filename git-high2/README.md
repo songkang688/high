@@ -32,12 +32,20 @@ git-high2/
 ├── app_git_high2.py          # 前端：Python / ONNX / 对比 三页签（端口 7862）
 ├── facehi_onnx.py            # 傻瓜调用：remove_highlight(path) / FacehiOnnx().run(...)
 ├── requirements.txt          # 运行依赖（版本放宽）
-├── lib/                      # 自定义算子库：libfacehi_custom_ops.so（Linux x86-64）
-│                             #             + facehi_custom_ops.dll（Windows x64）
+├── lib/                      # 原产物（未改）：libfacehi_custom_ops.so + facehi_custom_ops.dll
+├── output-1.22.0/            # 额外一套：onnx/ORT 1.22.0 重导出 + 重编 so/dll + 说明 + 样例图
 ├── bench/                    # 三引擎平均用时基准（BENCH_REPORT.md + 脚本 + 原始 csv）
 └── cpp/                      # 编译自定义算子库所需的精简源码 + CMakeLists
                               #（含 cmake/mingw-w64-x86_64.cmake 交叉编译 toolchain）
 ```
+
+## output-1.22.0（额外交付，不覆盖原产物）
+
+`lib/` 与 `models/facehi.onnx` **保持原样**。需要 ONNX / ONNX Runtime **1.22.0** 时，用独立目录
+`output-1.22.0/`：里面是重新导出的 `facehi.onnx`、按 ORT 1.22.0 头文件重编的
+`libfacehi_custom_ops.so` / `facehi_custom_ops.dll`、私有运行时 `libfacehi_ort122.so` /
+`facehi_ort122.dll`、Windows/Linux 使用说明、样例图 zip。
+运行依赖钉死 `onnxruntime==1.22.0`，不要和 `lib/` 里的旧库混用。
 
 ## 快速开始
 

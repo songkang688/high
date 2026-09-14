@@ -1,0 +1,24 @@
+git-high2 output-1.22.0
+built_utc=2026-09-07T04:00:10Z
+onnx_python=1.22.0
+onnxruntime=1.22.0 (ORT_API_VERSION 22)
+opencv_cxx=4.14.0 static
+yaml_cpp=0.8.0 static
+linux_gxx=13.3.0 IPP=ON ICV=2026.0.0
+windows_mingw=g++-posix GCC13 OpenCV4.14.0 IPP=OFF
+fp_flags=-O2 -ffp-contract=off -fno-fast-math
+original_lib_and_models=kept (not overwritten)
+quality_vs_old_lib=14/17 bit-identical; 1.png max=7/255 MAE=0.003183 (same as old ONNX-vs-Python)
+speed_linux_warm_mean=old~0.227s new~0.213-0.217s (not slower; see COMPARE.md)
+
+files:
+  facehi.onnx	6279872	5.99 MB	sha256=255537e5b5a95d1aab5bfb7b31a28157d5176498d47f8de5703223dfd31e527e
+  libfacehi_custom_ops.so	43920392	41.89 MB	sha256=6e109c527f0581750a86909aa751e287a616db2c76d4dadee8200d06ef8f96da
+  facehi_custom_ops.dll	13328632	12.71 MB	sha256=e7dd33de3876b82fd7c87df622ea94d157b166ff43aa9763caf26286b8dffe00
+  libfacehi_ort122.so	21042416	20.07 MB	sha256=3da6146e14e7b8aaec625dde11d6114c7457c87a5f93d744897da8781e35c673
+  facehi_ort122.dll	12418080	11.84 MB	sha256=579b636403983254346a5c1d80bd28f1519cd1e284cd204f8d4ff41f8d711559
+  Linux 使用说明.docx	37763	0.04 MB	sha256=8deb3dd9018c3e00cc8c29c2eeca4f2cd4c7d69335914f67d2c9a9716bde57ef
+  Windows 使用说明.docx	37730	0.04 MB	sha256=564d26223dcce15c5eb9a094811540c7d920bc8efa1492811af5500466ba5265
+  样例图.zip	20490238	19.54 MB	sha256=37341e6548aea82d08e4b6a2391cc691761962f0eac005d12da198733816eec9
+
+inner_ort=libfacehi_ort122.so / facehi_ort122.dll (private ORT 1.22.0)

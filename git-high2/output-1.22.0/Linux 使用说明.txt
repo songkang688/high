@@ -1,0 +1,27 @@
+本目录是 git-high2 默认档（facehi.onnx）按 ONNX / ONNX Runtime 1.22.0 重新导出、重新编译后的完整交付包。原来的 git-high2/lib/ 与 git-high2/models/ 没有改动。
+
+配套文件：facehi.onnx + libfacehi_custom_ops.so + libfacehi_ort122.so 必须放在同一目录。模型图里只有自定义域 ai.facehi 的节点，不注册 .so，onnxruntime 会直接报找不到算子。libfacehi_ort122.so 是 ONNX Runtime 1.22.0 的私有副本，给自定义算子内部跑人脸检测/关键点子模型用；请勿删除，也不要和 pip 的 onnxruntime 混路径。
+
+环境要求：Linux x86-64，Python 3.10+。
+
+安装依赖：
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt
+requirements.txt 已钉死 onnxruntime==1.22.0，请不要换成其他主版本。
+
+推理示例：
+  .venv/bin/python -c "from facehi_onnx import remove_highlight; remove_highlight('样例图/1.png', save_to='out.png')"
+
+或解压 样例图.zip 后：
+  .venv/bin/python -c "from facehi_onnx import FacehiOnnx; s=FacehiOnnx(); r,m=s.run('1.png'); print(r.shape, m.shape)"
+
+底层等价写法：
+  import onnxruntime as ort
+  so = ort.SessionOptions()
+  so.register_custom_ops_library('libfacehi_custom_ops.so')
+  sess = ort.InferenceSession('facehi.onnx', so)
+  result, mask = sess.run(None, {'image': bgr_uint8_hwc})
+
+输入：uint8 BGR [H,W,3]（与 cv2.imread 一致）。输出：result 同形状 BGR，highlight_mask 为 uint8 [H,W] 硬掩码。
+
+不要把本目录的 .so 与旧的 git-high2/lib/libfacehi_custom_ops.so 混用；旧库按更高版本 ORT 头文件编过，本目录只保证配合 onnxruntime 1.22.0。
