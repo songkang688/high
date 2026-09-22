@@ -28,6 +28,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-O2 -ffp-contract=off -fno-fast-math)
 endif()
 
+# 在 glibc 2.28 的系统（如 UOS / Debian 10）上加载时打开：
+# 用该系统自带的 g++ 编译，并静态链入 libstdc++ / libgcc，
+# 避免把宿主机上更高版本的 libstdc++.so.6 带进产物。
+option(FACEHI_STATIC_LIBCXX "静态链接 libstdc++ 与 libgcc" OFF)
+
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs photo objdetect)
 find_package(yaml-cpp REQUIRED)
 # 交叉编译时 yaml-cpp 头文件不在默认 include 路径（Linux 上 /usr/include 侥幸命中），
@@ -107,6 +112,17 @@ add_library(facehi_custom_ops SHARED src/custom_op.cpp)
 target_link_libraries(facehi_custom_ops PRIVATE facehi_core ${CMAKE_DL_LIBS})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_link_options(facehi_custom_ops PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+# GCC 8 的 std::filesystem 在独立的 libstdc++fs 里。
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+  if(FACEHI_STATIC_LIBCXX)
+    target_link_libraries(facehi_custom_ops PRIVATE "-Wl,-Bstatic" stdc++fs "-Wl,-Bdynamic")
+  else()
+    target_link_libraries(facehi_custom_ops PRIVATE stdc++fs)
+  endif()
+endif()
+if(FACEHI_STATIC_LIBCXX AND NOT WIN32)
+  target_link_options(facehi_custom_ops PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 if(WIN32)
   # facehi_onnx.py 按 "facehi_custom_ops.dll" 查找：去掉 MinGW 默认 lib 前缀。
