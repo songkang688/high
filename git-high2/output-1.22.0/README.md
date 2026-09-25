@@ -9,7 +9,7 @@
 | 文件 | 说明 |
 |---|---|
 | `facehi.onnx` | 默认档模型，用 Python `onnx==1.22.0` 重新导出 |
-| `libfacehi_custom_ops.so` | Linux x86-64 自定义算子（ORT 1.22.0 头文件） |
+| `libfacehi_custom_ops.so` | Linux x86-64 自定义算子。按 glibc 2.28 重编，libstdc++ 静态链入，UOS 可加载 |
 | `libfacehi_ort122.so` | Linux 私有 ORT 1.22.0，给自定义算子内部子模型用 |
 | `facehi_custom_ops.dll` | Windows x64 自定义算子（ORT 1.22.0 头文件） |
 | `facehi_ort122.dll` | Windows 私有 ORT 1.22.0，给自定义算子内部子模型用 |
